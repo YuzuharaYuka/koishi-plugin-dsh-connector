@@ -9,8 +9,6 @@ import { bindingKey, type BindingStore, type ChannelBinding } from './services/s
 import { getErrorMessage, logger, truncate } from './utils'
 
 const INCOMING_IMAGE_TIMEOUT_MS = 15000
-/** 会话列表单条消息最多渲染多少行，避免超出平台长度上限 */
-const MAX_RENDERED_SESSIONS = 60
 
 export interface HandlerDeps {
   ctx: Context
@@ -160,9 +158,8 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
     return MESSAGES.noSessions
   }
 
-  // 已按最后修改时间倒序；默认只取最近一批，避免列表刷屏。
-  // -a 放开 sessionLimit，但仍设硬上限，防止超长消息被平台拒收。
-  const cap = includeAll ? MAX_RENDERED_SESSIONS : deps.config.sessionLimit
+  // 已按最后修改时间倒序；默认只取最近一批，-a 时列出全部
+  const cap = includeAll ? all.length : deps.config.sessionLimit
   const sessions = all.slice(0, cap)
 
   const binding = bindingOf(deps, session)
@@ -198,11 +195,7 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
   }
   deps.listings.set(sessionKey(session), ordered)
   if (sessions.length < all.length) {
-    lines.push(
-      includeAll
-        ? `按修改时间排序，只显示最近 ${sessions.length} 个，其余用 dsh.use 加会话 ID 绑定。`
-        : `按修改时间排序，只显示最近 ${sessions.length} 个；加 -a 查看全部。`,
-    )
+    lines.push(`按修改时间排序，只显示最近 ${sessions.length} 个；加 -a 查看全部。`)
   }
   lines.push('用 dsh.use 序号绑定。')
   return lines.join('\n')
