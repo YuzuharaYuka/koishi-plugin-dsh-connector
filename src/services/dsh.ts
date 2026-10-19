@@ -1,0 +1,526 @@
+import { randomUUID } from 'node:crypto'
+import { DISCOVERY_HINT, DSH_ATTACHMENT_PREFIX } from '../constants'
+import type { Config } from '../config'
+import {
+  DshAuthError,
+  buildAuthCookie,
+  loginRelay,
+  readBrowserSessionSecret,
+  resolveDshHome,
+} from '../core/auth'
+import { discoverDshPort } from '../core/discover'
+import { decodeAttachment, extractContent, fetchImage, type TurnImage } from '../core/media'
+import { EventBridge, type ApprovalRequest } from '../core/mux'
+import { DshRpcError, callRpc } from '../core/rpc'
+import { logger, normalizeTimeZone, sleep } from '../utils'
+
+const AUTH_TIMEOUT_MS = 15000
+const RPC_TIMEOUT_MS = 30000
+const IMAGE_TIMEOUT_MS = 15000
+const PAGE_SIZE = 100
+/** 授权队列上限：请求可能在 DSH 界面被取消而收不到结果，不设上限会一直堆积 */
+const MAX_PENDING_APPROVALS = 50
+
+export type ApprovalDecision = 'allow' | 'deny'
+
+export interface DshSessionSummary {
+  sessionId: string
+  title: string
+  running: boolean
+  /** 子会话（子代理）不出现在普通列表里 */
+  parentSessionId?: string
+  cwd?: string
+  /** 还没跑过任何一轮的空会话 */
+  blank: boolean
+  /** 最后修改时间（毫秒），列表按它倒序 */
+  updatedAt: number
+}
+
+export interface SessionListOptions {
+  includeChildren?: boolean
+  includeBlank?: boolean
+}
+
+export interface TurnResult {
+  text: string
+  images: TurnImage[]
+  /** 未能取回或超出上限的图片数量，用于如实告知用户 */
+  skipped: number
+  seq: number
+}
+
+interface SequencedEvent {
+  seq: number
+  event: Record<string, unknown>
+}
+
+/** 等待超时时带上已经看到的最后一段回复，避免整段丢弃 */
+export class DshTurnTimeout extends Error {
+  constructor(readonly partial: string) {
+    super('等待 DSH 回复超时')
+    this.name = 'DshTurnTimeout'
+  }
+}
+
+function toSummary(row: unknown): DshSessionSummary | null {
+  if (!row || typeof row !== 'object') return null
+  const record = row as Record<string, unknown>
+  const sessionId = typeof record.sessionId === 'string' ? record.sessionId : ''
+  if (!sessionId) return null
+  const projections = (record.projections ?? {}) as Record<string, unknown>
+  const values = (projections.values ?? {}) as Record<string, unknown>
+  return {
+    sessionId,
+    title: typeof values.title === 'string' ? values.title : '',
+    running: Boolean(record.running),
+    parentSessionId: typeof record.parentSessionId === 'string' ? record.parentSessionId : undefined,
+    cwd: typeof record.cwd === 'string' && record.cwd ? record.cwd : undefined,
+    blank: Boolean(record.blank),
+    updatedAt: Number.isFinite(Number(record.updatedAt)) ? Number(record.updatedAt) : 0,
+  }
+}
+
+function parseBaseUrl(raw: string): string {
+  const text = raw.trim().replace(/\/+$/, '')
+  try {
+    const url = new URL(text)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol')
+    return text
+  } catch {
+    throw new DshAuthError(`配置项 \`baseUrl\` 不是合法的 HTTP 地址: ${raw}`)
+  }
+}
+
+/** 从 `assistant/message` 事件里取出文本块 */
+export function extractEventText(event: unknown): string {
+  if (!event || typeof event !== 'object') return ''
+  const data = ((event as Record<string, unknown>).data ?? {}) as Record<string, unknown>
+  const message = (data.message ?? {}) as Record<string, unknown>
+  const raw = message.content ?? data.content ?? []
+  const blocks = Array.isArray(raw) ? raw : [raw]
+  const parts: string[] = []
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue
+    const item = block as Record<string, unknown>
+    if ((item.type === 'text' || item.type === 'markdown') && typeof item.text === 'string') {
+      parts.push(item.text)
+    }
+  }
+  return parts.join('')
+}
+
+/**
+ * DSH 客户端：负责定位端口、取得 cookie、维护审批事件桥，并提供会话级操作。
+ *
+ * 直连与 relay 只差「cookie 从哪来」，其余 RPC 与事件桥完全一致。
+ */
+export class DshClient {
+  private baseUrl?: string
+  private cookie?: string
+  private secret?: Buffer
+  private authority?: string
+  private preferredPort?: number
+  private connecting?: Promise<void>
+  private bridge?: EventBridge
+  private readonly pending: ApprovalRequest[] = []
+  private approvalHandler?: (request: ApprovalRequest) => void
+
+  constructor(private readonly config: Config) {}
+
+  get relayMode(): boolean {
+    return this.config.mode === 'relay' || (this.config.mode === 'auto' && this.config.accessKey !== '')
+  }
+
+  get connected(): boolean {
+    return this.baseUrl !== undefined && this.cookie !== undefined
+  }
+
+  describe(): { mode: string; baseUrl?: string; bridge: boolean } {
+    return {
+      mode: this.relayMode ? 'relay' : 'direct',
+      baseUrl: this.baseUrl,
+      bridge: this.bridge?.connected ?? false,
+    }
+  }
+
+  async ensureReady(): Promise<void> {
+    if (this.baseUrl && this.cookie) return
+    if (!this.connecting) {
+      this.connecting = this.connect().finally(() => {
+        this.connecting = undefined
+      })
+    }
+    await this.connecting
+  }
+
+  private async connect(): Promise<void> {
+    if (this.relayMode) {
+      if (!this.config.baseUrl) {
+        throw new DshAuthError('relay 模式需要填写配置项 `baseUrl`，例如 `http://192.168.192.100`。')
+      }
+      const baseUrl = parseBaseUrl(this.config.baseUrl)
+      const cookie = await loginRelay(baseUrl, this.config.accessKey, AUTH_TIMEOUT_MS)
+      this.baseUrl = baseUrl
+      this.cookie = cookie
+      this.authority = new URL(baseUrl).host
+    } else {
+      const home = resolveDshHome(this.config.dshHome)
+      this.secret = await readBrowserSessionSecret(home)
+      let baseUrl = this.config.baseUrl
+      if (!baseUrl) {
+        const port = await discoverDshPort(this.preferredPort)
+        if (port === undefined) throw new DshAuthError(DISCOVERY_HINT)
+        this.preferredPort = port
+        baseUrl = `http://127.0.0.1:${port}`
+      }
+      const resolved = parseBaseUrl(baseUrl)
+      const authority = new URL(resolved).host
+      const cookie = buildAuthCookie(this.secret, authority)
+      this.baseUrl = resolved
+      this.authority = authority
+      this.cookie = cookie
+    }
+
+    logger.debug(`[client] 已连接 ${this.baseUrl} (${this.relayMode ? 'relay' : 'direct'})`)
+    this.startBridge()
+  }
+
+  /** DSH 重启会换端口与密钥，这里丢弃连接状态，保留上次端口作为首选探测目标 */
+  private invalidate(): void {
+    this.baseUrl = undefined
+    this.cookie = undefined
+    this.bridge?.close()
+    this.bridge = undefined
+  }
+
+  private async refreshCookie(): Promise<string> {
+    if (this.relayMode) {
+      const baseUrl = this.baseUrl ?? this.config.baseUrl
+      if (!baseUrl) throw new DshAuthError('relay 模式需要填写配置项 `baseUrl`')
+      this.cookie = await loginRelay(baseUrl, this.config.accessKey, AUTH_TIMEOUT_MS)
+      return this.cookie
+    }
+
+    const secret = await readBrowserSessionSecret(resolveDshHome(this.config.dshHome))
+    this.secret = secret
+    if (!this.baseUrl) await this.ensureReady()
+    if (!this.baseUrl) throw new DshAuthError('DSH 地址尚未确定')
+    this.authority = new URL(this.baseUrl).host
+    this.cookie = buildAuthCookie(secret, this.authority)
+    return this.cookie
+  }
+
+  private async getCookieForBridge(): Promise<string> {
+    await this.ensureReady()
+    if (!this.cookie) throw new DshAuthError('DSH 凭据尚未就绪')
+    return this.cookie
+  }
+
+  private startBridge(): void {
+    if (this.bridge || !this.baseUrl) return
+    const baseUrl = this.baseUrl
+    this.bridge = new EventBridge({
+      wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/remote.mux`,
+      baseUrl,
+      debug: this.config.debug,
+      getCookie: () => this.getCookieForBridge(),
+      onApproval: (request) => {
+        this.pending.push(request)
+        // 授权请求可能被 DSH 界面取消而永远收不到结论，限制队列长度避免无限增长
+        if (this.pending.length > MAX_PENDING_APPROVALS) this.pending.shift()
+        this.approvalHandler?.(request)
+      },
+    })
+    this.bridge.start()
+  }
+
+  private async rawRpc(method: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    if (!this.baseUrl || !this.cookie) throw new DshAuthError('DSH 连接尚未就绪')
+    return callRpc({ baseUrl: this.baseUrl, cookie: this.cookie, method, args, timeoutMs })
+  }
+
+  async rpc(method: string, args: Record<string, unknown> = {}, timeoutMs = RPC_TIMEOUT_MS): Promise<unknown> {
+    await this.ensureReady()
+    try {
+      return await this.rawRpc(method, args, timeoutMs)
+    } catch (error) {
+      if (!(error instanceof DshRpcError)) throw error
+      // cookie 过期就重签一次；网络中断多半是 DSH 重启换了端口，重新发现后再试
+      if (error.code === 'unauthorized') {
+        await this.refreshCookie()
+        return this.rawRpc(method, args, timeoutMs)
+      }
+      if (error.code === 'network') {
+        this.invalidate()
+        await this.ensureReady()
+        return this.rawRpc(method, args, timeoutMs)
+      }
+      throw error
+    }
+  }
+
+  /**
+   * 会话列表，按最后修改时间倒序。
+   *
+   * `session/list` 会同时返回子代理会话与从未使用过的空会话，两者都不该出现在
+   * 用户可见的列表里：子会话的标题其实是子代理的提示词，空会话则没有内容。
+   * 排序放在这里，保证所有调用方（列表、绑定、状态）看到的是同一个顺序。
+   */
+  async listSessions(options: SessionListOptions = {}): Promise<DshSessionSummary[]> {
+    const value = (await this.rpc('session/list', { _request: {} })) as { items?: unknown[] }
+    return (value.items ?? [])
+      .map(toSummary)
+      .filter((item): item is DshSessionSummary => item !== null)
+      .filter((item) => {
+        if (!options.includeChildren && item.parentSessionId) return false
+        if (!options.includeBlank && item.blank) return false
+        return true
+      })
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+  }
+
+  async createSession(cwd?: string): Promise<string> {
+    const request: Record<string, unknown> = {}
+    if (cwd) request.cwd = cwd
+    const value = (await this.rpc('session/create', { request })) as { sessionId?: string }
+    const sessionId = value.sessionId
+    if (!sessionId) throw new Error('DSH 没有返回会话 ID')
+    await this.applyDefaultPermission(sessionId)
+    return sessionId
+  }
+
+  /** 新建会话按配置切到默认权限；失败只记日志，不阻断会话创建 */
+  private async applyDefaultPermission(sessionId: string): Promise<void> {
+    const preset = this.config.defaultPermission
+    if (!preset) return
+    try {
+      await this.setPermission(sessionId, preset)
+      logger.debug(`[session] 新会话权限已设为 ${preset}`)
+    } catch (error) {
+      logger.warn(`[session] 新会话权限设置失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async sessionTitle(sessionId: string): Promise<string> {
+    const sessions = await this.listSessions()
+    return sessions.find((item) => item.sessionId === sessionId)?.title ?? ''
+  }
+
+  /** 权限预设目录，由 DSH 官方插件 `dsh-permission-presets` 提供 */
+  async permissionPresets(): Promise<string[]> {
+    const value = (await this.rpc('permissionPresets/catalog', {})) as {
+      options?: Array<{ value?: unknown }>
+    }
+    return (value.options ?? []).map((option) => String(option?.value ?? '')).filter(Boolean)
+  }
+
+  /** 会话当前生效的权限预设 */
+  async currentPermission(sessionId: string): Promise<string | undefined> {
+    const value = (await this.rpc('session/projections', { request: { sessionId } })) as {
+      values?: Record<string, unknown>
+    }
+    const permissions = ((value.values ?? {}) as Record<string, unknown>).permissions
+    if (!permissions || typeof permissions !== 'object') return undefined
+    const current = (permissions as Record<string, unknown>).currentValue
+    return typeof current === 'string' ? current : undefined
+  }
+
+  /** 切权限没有独立 RPC，走官方 `/permission` 斜杠命令 */
+  async setPermission(sessionId: string, preset: string): Promise<void> {
+    const value = (await this.rpc('commands/execute', {
+      agentId: sessionId,
+      line: `/permission ${preset}`,
+      submittedAttachments: [],
+    })) as { result?: { kind?: string; text?: string } }
+    if (value?.result?.kind !== 'success') {
+      throw new Error(String(value?.result?.text ?? '切换权限失败'))
+    }
+  }
+
+  async cursor(sessionId: string): Promise<number> {
+    const value = (await this.rpc('session/projections', { request: { sessionId } })) as { asOfSeq?: number }
+    const cursor = Number(value.asOfSeq ?? 0)
+    return Number.isFinite(cursor) ? cursor : 0
+  }
+
+  async page(sessionId: string, throughSeq: number, maxMessages = PAGE_SIZE): Promise<unknown[]> {
+    const value = (await this.rpc('session/page', {
+      request: {
+        address: { kind: 'session', sessionId },
+        throughSeq,
+        maxMessages,
+      },
+    })) as { records?: unknown[] }
+    return value.records ?? []
+  }
+
+  async prompt(sessionId: string, text: string, images: TurnImage[] = []): Promise<void> {
+    const content: Array<Record<string, unknown>> = []
+    if (text) content.push({ type: 'text', text })
+    // DSH 的图片块直接接受内联 base64，不需要先上传
+    for (const image of images) {
+      content.push({ type: 'image', data: image.buffer.toString('base64'), mediaType: image.type })
+    }
+    await this.rpc('session/prompt', {
+      request: {
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content,
+        clientTimeZone: normalizeTimeZone(this.config.clientTimeZone),
+      },
+    })
+  }
+
+  async cancel(sessionId: string): Promise<void> {
+    await this.rpc('session/cancel', { request: { sessionId } })
+  }
+
+  async history(sessionId: string, limit: number): Promise<string[]> {
+    const cursor = await this.cursor(sessionId)
+    if (cursor <= 0) return []
+    const events = await this.pageEvents(sessionId, cursor, 0)
+    const messages: string[] = []
+    for (const item of events) {
+      if (item.event.type !== 'assistant/message') continue
+      const text = extractEventText(item.event).trim()
+      if (text) messages.push(text)
+    }
+    return messages.slice(-limit)
+  }
+
+  /** 取出 `baseline` 之后的事件，按 seq 升序排列；分页返回的顺序不作假设 */
+  private async pageEvents(sessionId: string, throughSeq: number, baseline: number): Promise<SequencedEvent[]> {
+    const records = await this.page(sessionId, throughSeq)
+    const events: SequencedEvent[] = []
+    for (const entry of records) {
+      const event = (entry as { event?: unknown } | null)?.event
+      if (!event || typeof event !== 'object') continue
+      const record = event as Record<string, unknown>
+      const seq = Number(record.seq ?? 0)
+      if (!Number.isFinite(seq) || seq <= baseline) continue
+      events.push({ seq, event: record })
+    }
+    return events.sort((left, right) => left.seq - right.seq)
+  }
+
+  /** 提交一轮任务并等待 `turn/end`，中间步骤的 assistant 消息不并入最终结果 */
+  async runTurn(sessionId: string, text: string, images: TurnImage[] = []): Promise<TurnResult> {
+    const baseline = await this.cursor(sessionId)
+    await this.prompt(sessionId, text, images)
+    return this.awaitTurn(sessionId, baseline)
+  }
+
+  async awaitTurn(sessionId: string, baseline: number): Promise<TurnResult> {
+    const deadline = Date.now() + this.config.promptTimeout * 1000
+    let lastSeen = ''
+    let lastCursor = baseline
+
+    while (Date.now() < deadline) {
+      const cursor = await this.cursor(sessionId)
+      // 游标没动就不用再翻页：空闲期每次轮询只花一次 RPC
+      if (cursor > baseline && cursor !== lastCursor) {
+        lastCursor = cursor
+        const events = await this.pageEvents(sessionId, cursor, baseline)
+
+        for (const item of events) {
+          if (item.event.type !== 'assistant/message') continue
+          const candidate = extractEventText(item.event).trim()
+          if (candidate) lastSeen = candidate
+        }
+
+        // 一轮里每条工具步骤都会产出一条 assistant/message，只有 turn/end 才算结束
+        const end = [...events].reverse().find((item) => item.event.type === 'turn/end')
+        if (end) {
+          const data = (end.event.data ?? {}) as Record<string, unknown>
+          const reason = (data.reason ?? {}) as Record<string, unknown>
+          if (reason.kind === 'error') {
+            const error = (reason.error ?? {}) as Record<string, unknown>
+            throw new Error(`DSH 任务失败: ${String(error.message ?? error.code ?? '未知错误')}`)
+          }
+
+          let text = ''
+          const refs: string[] = []
+          for (const item of events) {
+            if (item.seq >= end.seq) break
+            if (item.event.type !== 'assistant/message') continue
+            const content = extractContent(item.event)
+            if (content.text.trim()) text = content.text.trim()
+            for (const ref of content.images) {
+              if (!refs.includes(ref)) refs.push(ref)
+            }
+          }
+          const resolved = await this.resolveImages(sessionId, refs)
+          return { text: text || lastSeen, images: resolved.images, skipped: resolved.skipped, seq: cursor }
+        }
+      }
+      await sleep(this.config.pollInterval)
+    }
+
+    throw new DshTurnTimeout(lastSeen)
+  }
+
+  /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
+  private async resolveImages(sessionId: string, refs: string[]): Promise<{ images: TurnImage[]; skipped: number }> {
+    if (refs.length === 0) return { images: [], skipped: 0 }
+    if (!this.config.enableImages) return { images: [], skipped: refs.length }
+
+    const maxBytes = this.config.maxImageMb * 1024 * 1024
+    const images: TurnImage[] = []
+    let skipped = 0
+
+    for (const ref of refs) {
+      if (images.length >= this.config.maxImages) {
+        skipped += 1
+        continue
+      }
+      const image = ref.startsWith(DSH_ATTACHMENT_PREFIX)
+        ? await this.readAttachment(sessionId, ref.slice(DSH_ATTACHMENT_PREFIX.length))
+        : await fetchImage(ref, maxBytes, IMAGE_TIMEOUT_MS)
+      if (!image || image.buffer.length > maxBytes) {
+        skipped += 1
+        continue
+      }
+      images.push(image)
+    }
+    return { images, skipped }
+  }
+
+  private async readAttachment(sessionId: string, attachmentId: string): Promise<TurnImage | null> {
+    try {
+      const value = (await this.rpc('session/attachment', {
+        request: { sessionId, attachmentId },
+      })) as { attachment?: { mediaType?: string }; data?: string }
+      const mediaType = String(value.attachment?.mediaType ?? 'image/png')
+      return decodeAttachment(String(value.data ?? ''), mediaType)
+    } catch (error) {
+      logger.debug(`[media] 读取附件失败 ${attachmentId}: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
+  }
+
+  setApprovalHandler(handler: (request: ApprovalRequest) => void): void {
+    this.approvalHandler = handler
+  }
+
+  listPendingApprovals(sessionId?: string): ApprovalRequest[] {
+    return this.pending.filter((item) => !sessionId || !item.sessionId || item.sessionId === sessionId)
+  }
+
+  async answerApproval(decision: ApprovalDecision, sessionId?: string): Promise<ApprovalRequest | undefined> {
+    const target = this.listPendingApprovals(sessionId).at(-1)
+    if (!target) return undefined
+    if (!this.bridge) throw new Error('审批事件桥尚未就绪，请稍后重试')
+    await this.bridge.answer(target.eventId, decision)
+    const index = this.pending.indexOf(target)
+    if (index >= 0) this.pending.splice(index, 1)
+    return target
+  }
+
+  dispose(): void {
+    this.bridge?.close()
+    this.bridge = undefined
+    this.pending.length = 0
+    this.approvalHandler = undefined
+  }
+}

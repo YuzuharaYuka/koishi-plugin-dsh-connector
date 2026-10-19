@@ -1,0 +1,93 @@
+import type { Context } from 'koishi'
+import { join } from 'node:path'
+import { type Config, normalizeConfig } from './config'
+import { registerCommands } from './commands'
+import { PLUGIN_NAME } from './constants'
+import { DshClient, type DshSessionSummary } from './services/dsh'
+import { BindingStore } from './services/store'
+import { getErrorMessage, logger } from './utils'
+
+export * from './config'
+export const name = PLUGIN_NAME
+
+export const usage = `
+通过聊天平台控制同一台主机上运行的 DeepSeek Harness 会话。
+
+| 指令 | 别名 | 说明 |
+| :--- | :--- | :--- |
+| \`dsh.ping\` | \`dsh状态\` | 连接状态与当前绑定 |
+| \`dsh.sessions\` | \`dsh会话\` | 会话列表，加 \`-a\` 显示全部 |
+| \`dsh.new [目录]\` | \`dsh新建\` | 新建并绑定会话 |
+| \`dsh.use 序号\` | \`dsh切换\` | 按序号或 ID 绑定 |
+| \`dsh.run 内容\` | \`dsh运行\` | 交给 DSH 执行 |
+| \`dsh.stop\` | \`dsh停止\` | 停止当前任务 |
+| \`dsh.history [条数]\` | \`dsh历史\` | 回放最近回复 |
+| \`dsh.permission [预设]\` | \`dsh权限\` | 查看或切换权限预设 |
+| \`dsh.approve\` / \`dsh.deny\` | \`dsh允许\` / \`dsh拒绝\` | 处理授权 |
+| \`dsh.whoami\` | \`dsh我是谁\` | 查看自己的标识 |
+
+**权限**：只认用户白名单，写 \`平台:用户ID\`（如 \`onebot:123456\`）。名单内用户在私聊和群聊都能用；白名单为空时所有指令都会被拒绝（\`dsh.whoami\` 除外，用于取自己的标识）。
+
+**风险提示**：DSH 会话可执行本机命令、写入文件，被放行的用户等于拥有本机权限，请谨慎添加。
+`
+
+export function apply(ctx: Context, rawConfig: Config): void {
+  const config = normalizeConfig(rawConfig)
+  const store = new BindingStore(join(ctx.baseDir, 'data', 'koishi-plugin-dsh-connector', 'bindings.json'))
+  const client = new DshClient(config)
+  // 每个聊天最近一次 `dsh.sessions` 的顺序，供 `dsh.use <序号>` 使用
+  const listings = new Map<string, DshSessionSummary[]>()
+  // 正在执行任务的聊天，避免同一聊天并发跑两轮
+  const running = new Set<string>()
+
+  ctx.on('ready', async () => {
+    await store.load()
+    if (config.allowUsers.length === 0) {
+      logger.warn('未配置用户白名单，所有指令都会被拒绝；用 dsh.whoami 取到标识后填入 allowUsers。')
+    }
+    try {
+      await client.ensureReady()
+      const info = client.describe()
+      logger.info(`已连接 DSH (${info.mode}) ${info.baseUrl ?? ''}`)
+    } catch (error) {
+      // 连不上不该拖垮 Koishi；指令触发时还会再试一次
+      logger.error('连接 DSH 失败，插件暂不可用。')
+      logger.error(`原因: ${getErrorMessage(error)}`)
+    }
+  })
+
+  // 授权请求只在这条 WebSocket 上下发，收到后推回绑定过的聊天
+  client.setApprovalHandler((request) => {
+    const binding = request.sessionId ? store.findBySession(request.sessionId) : undefined
+    if (!binding) {
+      logger.debug('[approval] 没有对应的聊天绑定，跳过推送')
+      return
+    }
+    const bot = ctx.bots.find((item) => item.platform === binding.platform && item.selfId === binding.selfId)
+    if (!bot) {
+      logger.warn('[approval] 找不到对应的机器人实例，无法推送授权请求。')
+      return
+    }
+    const content = [
+      'DSH 请求授权',
+      request.tool ? `工具：${request.tool}` : '',
+      request.reason ? `原因：${request.reason}` : '',
+      `会话：${binding.sessionId}`,
+      '回复 dsh.approve 允许，dsh.deny 拒绝。',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    bot.sendMessage(binding.channelId, content).catch((error: unknown) => {
+      logger.warn(`[approval] 推送授权请求失败: ${getErrorMessage(error)}`)
+    })
+  })
+
+  registerCommands({ ctx, config, client, store, listings, running }, config)
+
+  ctx.on('dispose', () => {
+    client.dispose()
+    store.dispose()
+    listings.clear()
+    running.clear()
+  })
+}
