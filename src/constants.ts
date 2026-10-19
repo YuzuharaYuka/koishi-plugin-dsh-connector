@@ -69,7 +69,7 @@ export const MESSAGES = {
 
   sessionCreated: '已创建并绑定新的 DSH 会话。',
   sessionMissing: '没有找到匹配的 DSH 会话，发 dsh.sessions 查看可用列表。',
-  noSessions: 'DSH 里还没有会话，发 dsh.new 新建一个。',
+  noSessions: '还没有会话，发 dsh.new 新建一个。',
   listFirst: '先发 dsh.sessions 查看列表，再用 dsh.use 加序号绑定。',
   indexOutOfRange: (count: number) => `序号超出范围，当前列表只有 ${count} 个会话。`,
 
@@ -81,7 +81,7 @@ export const MESSAGES = {
   denySent: '已拒绝该授权请求。',
 
   emptyUsage: '请提供要交给 DSH 的内容，例如：dsh.run 列出当前目录的文件',
-  noContent: 'DSH 已完成这一轮，但没有返回可发送的内容。',
+  noContent: '已完成这一轮，但没有返回可发送的内容。',
   imagesSkipped: (count: number) => `有 ${count} 张图片未能取回或超出上限。`,
 } as const
 

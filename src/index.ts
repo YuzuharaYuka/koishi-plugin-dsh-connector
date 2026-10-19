@@ -69,7 +69,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return
     }
     const content = [
-      'DSH 请求授权',
+      '请求授权',
       request.tool ? `工具：${request.tool}` : '',
       request.reason ? `原因：${request.reason}` : '',
       `会话：${binding.sessionId}`,

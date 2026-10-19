@@ -139,7 +139,7 @@ export async function handlePing(deps: HandlerDeps, session: Session): Promise<s
   // 标题以 DSH 实时数据为准，绑定表里的只是绑定当时的快照
   const title = bound?.title || binding?.title || '未命名'
   return [
-    'DSH 连接正常',
+    '连接正常',
     `方式：${info.mode}`,
     `地址：${info.baseUrl ?? '未知'}`,
     `会话：${sessions.length} 个`,
@@ -175,8 +175,8 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
   const ordered: DshSessionSummary[] = []
   const header =
     sessions.length < all.length
-      ? `DSH 会话（显示 ${sessions.length} / 共 ${all.length} 个）`
-      : `DSH 会话（共 ${sessions.length} 个）`
+      ? `会话列表（显示 ${sessions.length} / 共 ${all.length} 个）`
+      : `会话列表（共 ${sessions.length} 个）`
   const lines = [header]
   for (const [group, items] of groups) {
     lines.push(`【${group}】`)

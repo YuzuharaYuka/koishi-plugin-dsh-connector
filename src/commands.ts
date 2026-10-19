@@ -34,6 +34,12 @@ const HELP_TEXT = [
 export function registerCommands(deps: HandlerDeps, config: Config): void {
   const { ctx } = deps
 
+  /** 发信人是不是本进程里已知的机器人账号 */
+  const isBotSender = (session: Session): boolean => {
+    if (session.userId && session.userId === session.selfId) return true
+    return ctx.bots.some((bot) => bot.platform === session.platform && bot.selfId === session.userId)
+  }
+
   /**
    * 统一出口：先判权限，再把字符串结果过一遍纯文本转换，最后兜住异常。
    *
@@ -45,6 +51,8 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     options?: { ignoreAccess?: boolean },
   ) => {
     if (!session) return ''
+    // 机器人不该驱动 DSH：忽略机器人发来的消息，避免两个 bot 互相触发
+    if (isBotSender(session)) return ''
     if (!options?.ignoreAccess) {
       const denied = checkAccess(config, session)
       if (denied) return denied

@@ -48,7 +48,7 @@ export declare const MESSAGES: {
     readonly stopRequested: "已请求停止当前任务。";
     readonly sessionCreated: "已创建并绑定新的 DSH 会话。";
     readonly sessionMissing: "没有找到匹配的 DSH 会话，发 dsh.sessions 查看可用列表。";
-    readonly noSessions: "DSH 里还没有会话，发 dsh.new 新建一个。";
+    readonly noSessions: "还没有会话，发 dsh.new 新建一个。";
     readonly listFirst: "先发 dsh.sessions 查看列表，再用 dsh.use 加序号绑定。";
     readonly indexOutOfRange: (count: number) => string;
     readonly noPermissionBinding: "先绑定一个 DSH 会话，再查看或切换权限。";
@@ -57,7 +57,7 @@ export declare const MESSAGES: {
     readonly approveSent: "已允许该授权请求。";
     readonly denySent: "已拒绝该授权请求。";
     readonly emptyUsage: "请提供要交给 DSH 的内容，例如：dsh.run 列出当前目录的文件";
-    readonly noContent: "DSH 已完成这一轮，但没有返回可发送的内容。";
+    readonly noContent: "已完成这一轮，但没有返回可发送的内容。";
     readonly imagesSkipped: (count: number) => string;
 };
 /** 端口发现失败时的可执行指引 */
