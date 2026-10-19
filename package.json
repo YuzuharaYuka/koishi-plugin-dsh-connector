@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-dsh-connector",
   "description": "在聊天平台远程控制 DeepSeek Harness 会话：下发任务、切换权限、回传图片与长文分段。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
