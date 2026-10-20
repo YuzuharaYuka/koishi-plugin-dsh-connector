@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import { type Config, normalizeConfig } from './config'
 import { registerCommands } from './commands'
 import { MESSAGES, PLUGIN_NAME } from './constants'
-import { bufferAttachments, type PendingAttachments } from './handlers'
 import { DshClient, type DshSessionSummary } from './services/dsh'
 import { BindingStore } from './services/store'
 import { getErrorMessage, logger } from './utils'
@@ -44,8 +43,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const listings = new Map<string, DshSessionSummary[]>()
   // 正在执行任务的聊天，避免同一聊天并发跑两轮
   const running = new Set<string>()
-  // 只带附件、没有文字的消息先暂存，等下一条指令一起提交
-  const pending = new Map<string, PendingAttachments>()
 
   ctx.on('ready', async () => {
     await store.load()
@@ -89,20 +86,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     })
   })
 
-  const deps = { ctx, config, client, store, listings, running, pending }
-
-  // 单独发来的附件先记下来：QQ 无法把文字和文件放进同一条消息。
-  // 只有文件需要提示，图片单独发送很常见，静默暂存即可。
-  ctx.middleware((session, next) => {
-    const buffered = bufferAttachments(deps, session)
-    if (buffered && buffered.files.length > 0) {
-      const message = MESSAGES.attachmentsBuffered(buffered.images.length, buffered.files.length)
-      session.send(message).catch((error: unknown) => {
-        logger.debug(`[attachments] 暂存提示发送失败: ${getErrorMessage(error)}`)
-      })
-    }
-    return next()
-  }, true)
+  const deps = { ctx, config, client, store, listings, running }
 
   registerCommands(deps, config)
 
@@ -111,6 +95,5 @@ export function apply(ctx: Context, rawConfig: Config): void {
     store.dispose()
     listings.clear()
     running.clear()
-    pending.clear()
   })
 }

@@ -2,17 +2,6 @@ import { h, type Context, type Session } from 'koishi';
 import type { Config } from './config';
 import { type ApprovalDecision, type DshClient, type DshSessionSummary } from './services/dsh';
 import { type BindingStore } from './services/store';
-/** 单独发来的附件暂存多久，等下一次指令一起提交 */
-export declare const PENDING_TTL_MS: number;
-/** QQ 等平台无法把文字和文件放进同一条消息，文件先暂存再并入下一条指令 */
-export interface PendingAttachments {
-    images: string[];
-    files: Array<{
-        src: string;
-        name: string;
-    }>;
-    at: number;
-}
 export interface HandlerDeps {
     ctx: Context;
     config: Config;
@@ -22,8 +11,6 @@ export interface HandlerDeps {
     listings: Map<string, DshSessionSummary[]>;
     /** 正在执行任务的聊天：同一聊天不允许并发跑两轮 */
     running: Set<string>;
-    /** 只带附件、没有文字的消息，等下一次指令一起提交 */
-    pending: Map<string, PendingAttachments>;
 }
 /** 聊天窗口在绑定表中的键；私聊时 channelId 可能缺失 */
 export declare function sessionKey(session: Session): string;
@@ -39,10 +26,6 @@ export declare function shortSessionId(sessionId: string): string;
 export declare function handleWhoami(deps: HandlerDeps, session: Session): string;
 /** QQ 不渲染 Markdown，按配置转成纯文本 */
 export declare function renderReply(config: Config, text: string): string;
-/** 暂存附件；返回是否有新内容，供上层决定是否提示 */
-export declare function bufferAttachments(deps: HandlerDeps, session: Session): PendingAttachments | undefined;
-/** 取走暂存附件，过期的直接丢弃 */
-export declare function takePendingAttachments(deps: HandlerDeps, session: Session): PendingAttachments | undefined;
 export declare function handlePing(deps: HandlerDeps, session: Session): Promise<string>;
 export declare function handleSessions(deps: HandlerDeps, session: Session, includeAll?: boolean): Promise<string>;
 export interface WorkspaceEntry {

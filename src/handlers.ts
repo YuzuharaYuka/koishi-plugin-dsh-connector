@@ -25,16 +25,10 @@ const INCOMING_IMAGE_TIMEOUT_MS = 15000
 const MAX_INCOMING_FILES = 5
 /** 发送用的临时文件保留时长 */
 const TEMP_FILE_TTL_MS = 3600_000
-/** 单独发来的附件暂存多久，等下一次指令一起提交 */
-export const PENDING_TTL_MS = 10 * 60 * 1000
-/** 每个聊天最多暂存多少个附件 */
-const PENDING_MAX_ITEMS = 10
 
-/** QQ 等平台无法把文字和文件放进同一条消息，文件先暂存再并入下一条指令 */
-export interface PendingAttachments {
-  images: string[]
-  files: Array<{ src: string; name: string }>
-  at: number
+interface ChatElement {
+  type?: string
+  attrs?: Record<string, unknown>
 }
 
 export interface HandlerDeps {
@@ -46,8 +40,6 @@ export interface HandlerDeps {
   listings: Map<string, DshSessionSummary[]>
   /** 正在执行任务的聊天：同一聊天不允许并发跑两轮 */
   running: Set<string>
-  /** 只带附件、没有文字的消息，等下一次指令一起提交 */
-  pending: Map<string, PendingAttachments>
 }
 
 /** 聊天窗口在绑定表中的键；私聊时 channelId 可能缺失 */
@@ -134,11 +126,23 @@ async function sendLongText(
   for (const chunk of chunks) await session.send(chunk)
 }
 
+/**
+ * 当前消息 + 被引用消息里的元素。
+ *
+ * QQ 无法把文字和文件放进同一条消息，引用一条带附件的消息再发指令是唯一
+ * 精确的表达方式：带什么由用户自己指定，不会把群里其他人的东西卷进来。
+ * 引用解析失败时 quote 为空，只处理当前消息。
+ */
+function collectElements(session: Session): ChatElement[] {
+  const current = (session.elements ?? []) as unknown as ChatElement[]
+  const quoted = (session.event.message?.quote?.elements ?? []) as unknown as ChatElement[]
+  return [...current, ...quoted]
+}
+
 /** 取出消息里附带的图片来源，交给 DSH 作为图片块一起提交 */
 function collectSessionImages(session: Session): string[] {
-  const elements = (session.elements ?? []) as unknown as Array<{ type?: string; attrs?: Record<string, unknown> }>
   const sources: string[] = []
-  for (const element of elements) {
+  for (const element of collectElements(session)) {
     if (!element || (element.type !== 'img' && element.type !== 'image')) continue
     const attrs = element.attrs ?? {}
     const source = attrs.src ?? attrs.url ?? attrs.file
@@ -147,13 +151,9 @@ function collectSessionImages(session: Session): string[] {
   return sources
 }
 
-async function loadIncomingImages(
-  deps: HandlerDeps,
-  session: Session,
-  extra: string[] = [],
-): Promise<TurnImage[]> {
+async function loadIncomingImages(deps: HandlerDeps, session: Session): Promise<TurnImage[]> {
   if (!deps.config.enableImages) return []
-  const sources = [...extra, ...collectSessionImages(session)].slice(-deps.config.maxImages)
+  const sources = collectSessionImages(session).slice(-deps.config.maxImages)
   const maxBytes = deps.config.maxImageMb * 1024 * 1024
   const images: TurnImage[] = []
   for (const source of sources) {
@@ -165,9 +165,8 @@ async function loadIncomingImages(
 
 /** 取出消息里附带的文件元素 */
 function collectSessionFiles(session: Session): Array<{ src: string; name: string }> {
-  const elements = (session.elements ?? []) as unknown as Array<{ type?: string; attrs?: Record<string, unknown> }>
   const files: Array<{ src: string; name: string }> = []
-  for (const element of elements) {
+  for (const element of collectElements(session)) {
     if (!element || element.type !== 'file') continue
     const attrs = element.attrs ?? {}
     const src = attrs.src ?? attrs.url ?? attrs.file
@@ -187,15 +186,13 @@ async function loadIncomingAttachments(
   deps: HandlerDeps,
   session: Session,
   sessionId: string,
-  pending?: PendingAttachments,
 ): Promise<{ images: TurnImage[]; files: TurnFile[] }> {
-  const images = await loadIncomingImages(deps, session, pending?.images ?? [])
+  const images = await loadIncomingImages(deps, session)
   if (!deps.config.enableFiles) return { images, files: [] }
 
   const maxBytes = deps.config.maxFileMb * 1024 * 1024
   const files: TurnFile[] = []
-  const sources = [...(pending?.files ?? []), ...collectSessionFiles(session)]
-  for (const item of sources.slice(-(MAX_INCOMING_FILES + (pending?.files.length ?? 0)))) {
+  for (const item of collectSessionFiles(session).slice(-MAX_INCOMING_FILES)) {
     const loaded = await loadFileSource(item.src, item.name, maxBytes, INCOMING_IMAGE_TIMEOUT_MS)
     if (!loaded) {
       logger.debug(`[media] 文件读取失败或超出上限: ${item.name || item.src}`)
@@ -209,37 +206,6 @@ async function loadIncomingAttachments(
     }
   }
   return { images, files }
-}
-
-/** 暂存附件；返回是否有新内容，供上层决定是否提示 */
-export function bufferAttachments(deps: HandlerDeps, session: Session): PendingAttachments | undefined {
-  if (session.userId && session.userId === session.selfId) return undefined
-  if (checkAccess(deps.config, session) !== null) return undefined
-  // 带文字的消息按正常指令处理，附件由 handleRun 直接读取
-  if (stripChatMarkup(session.content ?? '')) return undefined
-
-  const images = collectSessionImages(session)
-  const files = collectSessionFiles(session)
-  if (images.length === 0 && files.length === 0) return undefined
-
-  const key = sessionKey(session)
-  const previous = deps.pending.get(key)
-  const entry: PendingAttachments =
-    previous && Date.now() - previous.at <= PENDING_TTL_MS ? previous : { images: [], files: [], at: 0 }
-  entry.images = [...entry.images, ...images].slice(-PENDING_MAX_ITEMS)
-  entry.files = [...entry.files, ...files].slice(-PENDING_MAX_ITEMS)
-  entry.at = Date.now()
-  deps.pending.set(key, entry)
-  return { ...entry }
-}
-
-/** 取走暂存附件，过期的直接丢弃 */
-export function takePendingAttachments(deps: HandlerDeps, session: Session): PendingAttachments | undefined {
-  const key = sessionKey(session)
-  const entry = deps.pending.get(key)
-  deps.pending.delete(key)
-  if (!entry || Date.now() - entry.at > PENDING_TTL_MS) return undefined
-  return entry
 }
 
 export async function handlePing(deps: HandlerDeps, session: Session): Promise<string> {
@@ -280,19 +246,7 @@ export async function handlePing(deps: HandlerDeps, session: Session): Promise<s
     logger.debug(`[ping] 读取会话状态失败: ${getErrorMessage(error)}`)
   }
 
-  const pending = pendingSummary(deps, session)
-  if (pending) lines.push(`暂存附件：${pending}`)
   return lines.join('\n')
-}
-
-/** 状态页里顺带展示已暂存但还没提交的附件 */
-function pendingSummary(deps: HandlerDeps, session: Session): string | undefined {
-  const entry = deps.pending.get(sessionKey(session))
-  if (!entry || Date.now() - entry.at > PENDING_TTL_MS) return undefined
-  const parts: string[] = []
-  if (entry.images.length > 0) parts.push(`${entry.images.length} 张图片`)
-  if (entry.files.length > 0) parts.push(`${entry.files.length} 个文件`)
-  return parts.length > 0 ? parts.join('、') : undefined
 }
 
 export async function handleSessions(deps: HandlerDeps, session: Session, includeAll = false): Promise<string> {
@@ -452,12 +406,11 @@ export async function handleUse(deps: HandlerDeps, session: Session, target: str
 
 export async function handleRun(deps: HandlerDeps, session: Session, text: string): Promise<h.Fragment> {
   const input = stripChatMarkup(text)
-  const pending = takePendingAttachments(deps, session)
-  const hasAttachments = (session.elements ?? []).some((element) => {
-    const type = (element as { type?: string }).type
+  const hasAttachments = collectElements(session).some((element) => {
+    const type = element?.type
     return type === 'img' || type === 'image' || type === 'file'
   })
-  if (!input && !hasAttachments && !pending) return MESSAGES.emptyUsage
+  if (!input && !hasAttachments) return MESSAGES.emptyUsage
 
   // 同一聊天同时只允许一轮：两个等待会互相看到对方的 turn，结果容易串
   const key = sessionKey(session)
@@ -474,7 +427,7 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
     }
 
     // 文件要先上传到 DSH 换凭据，所以必须等绑定确定之后再读附件
-    const { images, files } = await loadIncomingAttachments(deps, session, binding.sessionId, pending)
+    const { images, files } = await loadIncomingAttachments(deps, session, binding.sessionId)
     if (!input && images.length === 0 && files.length === 0) return MESSAGES.emptyUsage
     const ack = acceptedMessage(images.length, files.length)
     await session.send(created ? `${MESSAGES.sessionCreated} ${ack}` : ack)

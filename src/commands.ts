@@ -145,8 +145,13 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
 
   ctx.command('dsh.run <text:text>', '交给 DSH 执行并等待结果')
     .alias('dsh运行')
-    .usage('内容和后面的所有文字一起提交给 DSH，消息附带的图片也会一并提交。\n未绑定会话时会自动新建一个。')
+    .usage(
+      '内容和后面的所有文字一起提交给 DSH，消息附带的图片也会一并提交。\n' +
+      'QQ 无法把文字和文件放进同一条消息：引用一条带附件的消息再发本指令，即可把该附件一起带上。\n' +
+      '未绑定会话时会自动新建一个。',
+    )
     .example('dsh.run 列出当前目录下的文件')
+    .example('（引用一个文件后）dsh.run 把这个文件转成 pdf')
     .action(({ session }, text) => action(session, (session) => handleRun(deps, session, text ?? '')))
 
   ctx.command('dsh.stop', '停止当前任务')
