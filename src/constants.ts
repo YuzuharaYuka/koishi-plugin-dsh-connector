@@ -45,6 +45,19 @@ export function presetLabel(value: string | undefined): string {
   return PRESET_LABELS[value] ?? value
 }
 
+/** DSH 思考等级的中文名 */
+export const EFFORT_LABELS: Record<string, string> = {
+  off: '关闭',
+  low: '低',
+  high: '高',
+  max: '最高',
+}
+
+export function effortLabel(value: string | undefined): string {
+  if (!value) return '默认'
+  return EFFORT_LABELS[value] ?? value
+}
+
 /**
  * 面向用户的文案。
  *
@@ -62,7 +75,6 @@ export const MESSAGES = {
 
   promptAccepted: '已提交到 DeepSeek Harness，正在执行……',
   busy: '这个聊天还有任务在执行，等它结束或先发 dsh.stop。',
-  promptAcceptedImages: (count: number) => `已提交到 DeepSeek Harness（含 ${count} 张图片），正在执行……`,
   promptTimedOut: '等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。',
 
   stopRequested: '已请求停止当前任务。',
@@ -79,6 +91,18 @@ export const MESSAGES = {
 
   approveSent: '已允许该授权请求。',
   denySent: '已拒绝该授权请求。',
+
+  noModelBinding: '先绑定一个 DSH 会话，再查看或切换模型。',
+  invalidModel: (value: string) => `没有找到模型：${value}，发 dsh.model 查看可用列表。`,
+  invalidEffort: (value: string, valid: string) => `无效的思考等级：${value}，可选 ${valid}。`,
+  noEffortChoice: '这个模型不支持调整思考等级。',
+
+  noWorkspace: '还没有可用的工作区，用 dsh.new 加路径新建一个。',
+  workspaceMissing: (value: string) => `没有找到工作区：${value}`,
+
+  getUsage: '用法：dsh.get 相对路径，例如 dsh.get src/index.ts。',
+  fileTooLarge: (mb: number) => `文件超过 ${mb} MB 上限，没有发送。`,
+  filesSkipped: (count: number) => `有 ${count} 个文件未能读取或超出上限。`,
 
   emptyUsage: '请提供要交给 DSH 的内容，例如：dsh.run 列出当前目录的文件',
   noContent: '已完成这一轮，但没有返回可发送的内容。',

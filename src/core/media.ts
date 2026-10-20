@@ -1,12 +1,19 @@
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { extname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DSH_ATTACHMENT_PREFIX, MARKDOWN_IMAGE_RE } from '../constants'
 
 export interface TurnImage {
   buffer: Buffer
   type: string
+}
+
+/** 聊天里收到的文件，按原样交给 DSH */
+export interface IncomingFile {
+  buffer: Buffer
+  name: string
+  mediaType: string
 }
 
 export interface ExtractedContent {
@@ -196,4 +203,84 @@ export async function loadImageSource(source: string, maxBytes: number, timeoutM
   } catch {
     return null
   }
+}
+
+const MEDIA_TYPES: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.csv': 'text/csv',
+  '.xml': 'application/xml',
+  '.yml': 'application/yaml',
+  '.yaml': 'application/yaml',
+  '.log': 'text/plain',
+  '.js': 'text/javascript',
+  '.ts': 'text/plain',
+  '.py': 'text/x-python',
+  '.zip': 'application/zip',
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+/** 文件名去掉路径与危险字符，避免写盘时逃出目标目录 */
+export function sanitizeFileName(name: string): string {
+  const leaf = name.split(/[\\/]/).filter(Boolean).pop() ?? 'file'
+  const cleaned = leaf.replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim()
+  return cleaned.slice(0, 80) || 'file'
+}
+
+function guessMediaType(buffer: Buffer, name: string): string {
+  const sniffed = sniffImageType(buffer)
+  if (sniffed) return sniffed
+  const ext = extname(name).toLowerCase()
+  return MEDIA_TYPES[ext] ?? 'application/octet-stream'
+}
+
+/** 读取聊天里文件元素指向的内容：支持 data URI、http(s) 与本地绝对路径 */
+export async function loadFileSource(
+  source: string,
+  name: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<IncomingFile | null> {
+  const value = source.trim()
+  if (!value) return null
+
+  let buffer: Buffer | undefined
+  if (/^data:/i.test(value)) {
+    const match = /^data:([^;,]*);base64,(.*)$/is.exec(value)
+    if (!match) return null
+    buffer = Buffer.from(match[2], 'base64')
+  } else if (/^https?:\/\//i.test(value)) {
+    try {
+      const response = await fetch(value, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) })
+      if (!response.ok) return null
+      const declared = Number(response.headers.get('content-length') ?? '0')
+      if (Number.isFinite(declared) && declared > maxBytes) return null
+      buffer = Buffer.from(await response.arrayBuffer())
+    } catch {
+      return null
+    }
+  } else {
+    let filePath = value
+    if (/^file:\/\//i.test(value)) {
+      try {
+        filePath = fileURLToPath(value)
+      } catch {
+        return null
+      }
+    }
+    if (!isAbsolute(filePath)) return null
+    try {
+      buffer = await readFile(filePath)
+    } catch {
+      return null
+    }
+  }
+
+  if (!buffer || buffer.length === 0 || buffer.length > maxBytes) return null
+  const safeName = sanitizeFileName(name || 'file')
+  return { buffer, name: safeName, mediaType: guessMediaType(buffer, safeName) }
 }

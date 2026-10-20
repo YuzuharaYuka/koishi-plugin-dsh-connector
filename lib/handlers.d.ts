@@ -28,7 +28,19 @@ export declare function handleWhoami(deps: HandlerDeps, session: Session): strin
 export declare function renderReply(config: Config, text: string): string;
 export declare function handlePing(deps: HandlerDeps, session: Session): Promise<string>;
 export declare function handleSessions(deps: HandlerDeps, session: Session, includeAll?: boolean): Promise<string>;
-export declare function handleNew(deps: HandlerDeps, session: Session, cwd?: string): Promise<string>;
+export interface WorkspaceEntry {
+    cwd: string;
+    count: number;
+    updatedAt: number;
+}
+/**
+ * 新建会话。
+ *
+ * 参数可以是工作区序号（来自 dsh.workspaces）、绝对路径，或省略走 `defaultWorkspace`。
+ */
+export declare function handleNew(deps: HandlerDeps, session: Session, target?: string): Promise<string>;
+/** 列出已知工作区，供 dsh.new 按序号选择 */
+export declare function handleWorkspaces(deps: HandlerDeps): Promise<string>;
 export declare function handleUse(deps: HandlerDeps, session: Session, target: string): Promise<string>;
 export declare function handleRun(deps: HandlerDeps, session: Session, text: string): Promise<h.Fragment>;
 export declare function handleStop(deps: HandlerDeps, session: Session): Promise<string>;
@@ -39,5 +51,11 @@ export declare function handleStop(deps: HandlerDeps, session: Session): Promise
  * `dsh-permission-presets` 插件提供，同时决定沙箱模式与审批策略。
  */
 export declare function handlePermission(deps: HandlerDeps, session: Session, preset?: string): Promise<string>;
+/** 查看或切换模型；思考等级可以跟在序号后面一起设置 */
+export declare function handleModel(deps: HandlerDeps, session: Session, target?: string, effort?: string): Promise<string>;
+/** 只调整思考等级，模型保持不变 */
+export declare function handleThink(deps: HandlerDeps, session: Session, effort?: string): Promise<string>;
+/** 取回会话工作区里的文件并发到聊天 */
+export declare function handleGet(deps: HandlerDeps, session: Session, path?: string): Promise<h.Fragment>;
 export declare function handleHistory(deps: HandlerDeps, session: Session, limit?: number): Promise<string>;
 export declare function handleApproval(deps: HandlerDeps, session: Session, decision: ApprovalDecision): Promise<string>;

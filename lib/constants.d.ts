@@ -29,6 +29,9 @@ export declare const PRESET_LABELS: Record<string, string>;
 /** DSH 公开的权限预设；新建会话的默认值只能从这里取 */
 export declare const PERMISSION_PRESETS: string[];
 export declare function presetLabel(value: string | undefined): string;
+/** DSH 思考等级的中文名 */
+export declare const EFFORT_LABELS: Record<string, string>;
+export declare function effortLabel(value: string | undefined): string;
 /**
  * 面向用户的文案。
  *
@@ -43,7 +46,6 @@ export declare const MESSAGES: {
     readonly noPendingApproval: "当前没有等待处理的授权请求。";
     readonly promptAccepted: "已提交到 DeepSeek Harness，正在执行……";
     readonly busy: "这个聊天还有任务在执行，等它结束或先发 dsh.stop。";
-    readonly promptAcceptedImages: (count: number) => string;
     readonly promptTimedOut: "等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。";
     readonly stopRequested: "已请求停止当前任务。";
     readonly sessionCreated: "已创建并绑定新的 DSH 会话。";
@@ -56,6 +58,15 @@ export declare const MESSAGES: {
     readonly permissionChanged: (label: string) => string;
     readonly approveSent: "已允许该授权请求。";
     readonly denySent: "已拒绝该授权请求。";
+    readonly noModelBinding: "先绑定一个 DSH 会话，再查看或切换模型。";
+    readonly invalidModel: (value: string) => string;
+    readonly invalidEffort: (value: string, valid: string) => string;
+    readonly noEffortChoice: "这个模型不支持调整思考等级。";
+    readonly noWorkspace: "还没有可用的工作区，用 dsh.new 加路径新建一个。";
+    readonly workspaceMissing: (value: string) => string;
+    readonly getUsage: "用法：dsh.get 相对路径，例如 dsh.get src/index.ts。";
+    readonly fileTooLarge: (mb: number) => string;
+    readonly filesSkipped: (count: number) => string;
     readonly emptyUsage: "请提供要交给 DSH 的内容，例如：dsh.run 列出当前目录的文件";
     readonly noContent: "已完成这一轮，但没有返回可发送的内容。";
     readonly imagesSkipped: (count: number) => string;

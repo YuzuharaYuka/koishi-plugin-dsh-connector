@@ -11,7 +11,7 @@ import {
 import { discoverDshPort } from '../core/discover'
 import { decodeAttachment, extractContent, fetchImage, type TurnImage } from '../core/media'
 import { EventBridge, type ApprovalRequest } from '../core/mux'
-import { DshRpcError, callRpc } from '../core/rpc'
+import { DshRpcError, callRpc, callRpcMultipart } from '../core/rpc'
 import { logger, normalizeTimeZone, sleep } from '../utils'
 
 const AUTH_TIMEOUT_MS = 15000
@@ -41,6 +41,41 @@ export interface SessionListOptions {
   includeBlank?: boolean
 }
 
+/** 聊天里收到的文件，上传到 DSH 后换成凭据再提交 */
+export interface TurnFile {
+  receiptId: string
+  name: string
+}
+
+/** DSH 可路由的模型，按 provider 分组展开 */
+export interface DshModelOption {
+  provider: string
+  providerName: string
+  model: string
+  name: string
+  description?: string
+  efforts: Array<{ id: string; name: string; description?: string }>
+  defaultEffort?: string
+}
+
+export interface DshModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
+export interface DshModelCatalog {
+  models: DshModelOption[]
+  /** 部署默认选择，新会话尚未指定模型时用它兜底 */
+  defaultSelection?: DshModelSelection
+}
+
+export interface DshWorkspaceEntry {
+  name: string
+  type: string
+  size?: number
+}
+
 export interface TurnResult {
   text: string
   images: TurnImage[]
@@ -59,6 +94,19 @@ export class DshTurnTimeout extends Error {
   constructor(readonly partial: string) {
     super('等待 DSH 回复超时')
     this.name = 'DshTurnTimeout'
+  }
+}
+
+function toModelSelection(raw: unknown): DshModelSelection | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Record<string, unknown>
+  const provider = typeof value.provider === 'string' ? value.provider : ''
+  const model = typeof value.model === 'string' ? value.model : ''
+  if (!provider || !model) return undefined
+  return {
+    provider,
+    model,
+    reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : undefined,
   }
 }
 
@@ -239,6 +287,34 @@ export class DshClient {
     return callRpc({ baseUrl: this.baseUrl, cookie: this.cookie, method, args, timeoutMs })
   }
 
+  /** 结果带二进制的接口走 multipart，重试策略与普通 RPC 一致 */
+  private async rpcMultipart(
+    method: string,
+    args: Record<string, unknown>,
+    timeoutMs = RPC_TIMEOUT_MS,
+  ): Promise<{ value: unknown; parts: Map<string, Buffer> }> {
+    await this.ensureReady()
+    const run = async () => {
+      if (!this.baseUrl || !this.cookie) throw new DshAuthError('DSH 连接尚未就绪')
+      return callRpcMultipart({ baseUrl: this.baseUrl, cookie: this.cookie, method, args, timeoutMs })
+    }
+    try {
+      return await run()
+    } catch (error) {
+      if (!(error instanceof DshRpcError)) throw error
+      if (error.code === 'unauthorized') {
+        await this.refreshCookie()
+        return run()
+      }
+      if (error.code === 'network') {
+        this.invalidate()
+        await this.ensureReady()
+        return run()
+      }
+      throw error
+    }
+  }
+
   async rpc(method: string, args: Record<string, unknown> = {}, timeoutMs = RPC_TIMEOUT_MS): Promise<unknown> {
     await this.ensureReady()
     try {
@@ -337,6 +413,105 @@ export class DshClient {
     }
   }
 
+  /** 全部可路由模型，按 provider 分组展开成一维；附带部署默认选择 */
+  async modelCatalog(): Promise<DshModelCatalog> {
+    const value = (await this.rpc('session/modelCatalog', {})) as {
+      default?: Record<string, unknown>
+      groups?: Array<{ id?: string; name?: string; models?: Array<Record<string, unknown>> }>
+    }
+    const options: DshModelOption[] = []
+    for (const group of value.groups ?? []) {
+      const provider = String(group.id ?? '')
+      const providerName = String(group.name ?? group.id ?? '')
+      for (const model of group.models ?? []) {
+        const reasoning = (model.reasoning ?? {}) as Record<string, unknown>
+        options.push({
+          provider,
+          providerName,
+          model: String(model.id ?? ''),
+          name: String(model.name ?? model.id ?? ''),
+          description: typeof model.description === 'string' ? model.description : undefined,
+          efforts: Array.isArray(reasoning.efforts)
+            ? (reasoning.efforts as Array<Record<string, unknown>>).map((item) => ({
+                id: String(item.id ?? ''),
+                name: String(item.name ?? item.id ?? ''),
+                description: typeof item.description === 'string' ? item.description : undefined,
+              }))
+            : [],
+          defaultEffort: typeof reasoning.defaultEffort === 'string' ? reasoning.defaultEffort : undefined,
+        })
+      }
+    }
+    return { models: options, defaultSelection: toModelSelection(value.default) }
+  }
+
+  /** 会话当前生效的模型与思考等级；`next` 是下一次生效的选择 */
+  async modelSelection(sessionId: string): Promise<DshModelSelection | undefined> {
+    const value = (await this.rpc('session/projections', { request: { sessionId } })) as {
+      values?: Record<string, unknown>
+    }
+    const selection = ((value.values ?? {}) as Record<string, unknown>).modelSelection as
+      | Record<string, unknown>
+      | undefined
+    return toModelSelection(selection?.next ?? selection?.lastUsed)
+  }
+
+  async selectModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    reasoningEffort?: string,
+  ): Promise<void> {
+    const request: Record<string, unknown> = { sessionId, provider, model }
+    if (reasoningEffort) request.reasoningEffort = reasoningEffort
+    await this.rpc('session/selectModel', { request })
+  }
+
+  /** 把聊天里的文件上传到会话，返回可直接放进 prompt 的凭据 */
+  async uploadFile(sessionId: string, name: string, mediaType: string, buffer: Buffer): Promise<string> {
+    const value = (await this.rpc('fileUploads/upload', {
+      agentId: sessionId,
+      request: { name, mediaType, data: buffer.toString('base64') },
+    })) as { receiptId?: string }
+    if (!value?.receiptId) throw new Error('DSH 没有返回文件凭据')
+    return value.receiptId
+  }
+
+  /** 列会话工作区里的目录内容 */
+  async listWorkspace(sessionId: string, path: string): Promise<DshWorkspaceEntry[]> {
+    const value = (await this.rpc('workspaceFiles/list', {
+      workspaceFileScopeId: sessionId,
+      path,
+    })) as { entries?: Array<Record<string, unknown>> }
+    return (value.entries ?? []).map((entry) => ({
+      name: String(entry.name ?? ''),
+      type: String(entry.type ?? 'file'),
+      size: Number.isFinite(Number(entry.size)) ? Number(entry.size) : undefined,
+    }))
+  }
+
+  /** 读会话工作区里的一个文件；超出上限时报错而不是截断 */
+  async readWorkspaceFile(
+    sessionId: string,
+    path: string,
+    maxBytes: number,
+  ): Promise<{ name: string; buffer: Buffer; bytes: number }> {
+    const { value, parts } = await this.rpcMultipart('workspaceFiles/readBytes', {
+      workspaceFileScopeId: sessionId,
+      path,
+      options: { range: { offset: 0, length: maxBytes + 1 } },
+    })
+
+    const buffer = parts.get('bytes-0')
+    if (!buffer) throw new Error('DSH 没有返回文件内容')
+    if (buffer.length > maxBytes) throw new Error(`文件超过 ${Math.round(maxBytes / 1024 / 1024)} MB 上限`)
+
+    const meta = (value ?? {}) as Record<string, unknown>
+    const absolute = typeof meta.absolutePath === 'string' ? meta.absolutePath : path
+    const name = absolute.split(/[\\/]/).filter(Boolean).pop() ?? 'file'
+    return { name, buffer, bytes: buffer.length }
+  }
+
   async cursor(sessionId: string): Promise<number> {
     const value = (await this.rpc('session/projections', { request: { sessionId } })) as { asOfSeq?: number }
     const cursor = Number(value.asOfSeq ?? 0)
@@ -354,12 +529,21 @@ export class DshClient {
     return value.records ?? []
   }
 
-  async prompt(sessionId: string, text: string, images: TurnImage[] = []): Promise<void> {
+  async prompt(
+    sessionId: string,
+    text: string,
+    images: TurnImage[] = [],
+    files: TurnFile[] = [],
+  ): Promise<void> {
     const content: Array<Record<string, unknown>> = []
     if (text) content.push({ type: 'text', text })
     // DSH 的图片块直接接受内联 base64，不需要先上传
     for (const image of images) {
       content.push({ type: 'image', data: image.buffer.toString('base64'), mediaType: image.type })
+    }
+    // 文件必须先走 fileUploads/upload 换凭据
+    for (const file of files) {
+      content.push({ type: 'file', receiptId: file.receiptId })
     }
     await this.rpc('session/prompt', {
       request: {
@@ -405,9 +589,14 @@ export class DshClient {
   }
 
   /** 提交一轮任务并等待 `turn/end`，中间步骤的 assistant 消息不并入最终结果 */
-  async runTurn(sessionId: string, text: string, images: TurnImage[] = []): Promise<TurnResult> {
+  async runTurn(
+    sessionId: string,
+    text: string,
+    images: TurnImage[] = [],
+    files: TurnFile[] = [],
+  ): Promise<TurnResult> {
     const baseline = await this.cursor(sessionId)
-    await this.prompt(sessionId, text, images)
+    await this.prompt(sessionId, text, images, files)
     return this.awaitTurn(sessionId, baseline)
   }
 

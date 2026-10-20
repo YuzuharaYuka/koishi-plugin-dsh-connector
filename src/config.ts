@@ -15,12 +15,16 @@ export interface Config {
   allowUsers: string[]
   /** 新建会话后自动切换到的权限预设；空串表示沿用 DSH 默认 */
   defaultPermission: string
+  /** 新建会话使用的工作区；空串表示用 DSH 默认目录 */
+  defaultWorkspace: string
   mergeForward: boolean
   splitLength: number
   chunkLength: number
   enableImages: boolean
   maxImages: number
   maxImageMb: number
+  enableFiles: boolean
+  maxFileMb: number
   debug: boolean
 }
 
@@ -67,6 +71,9 @@ export const Config: Schema<Config> = Schema.intersect([
       .max(200)
       .default(20)
       .description('**列表上限**<br>`dsh.sessions` 默认显示最近多少个会话'),
+    defaultWorkspace: Schema.string()
+      .default('')
+      .description('**默认工作区**<br>`dsh.new` 不带参数时使用；留空则用 DSH 默认目录'),
     clientTimeZone: Schema.string()
       .default('Asia/Shanghai')
       .description('**客户端时区**<br>IANA 名称，如 `Asia/Shanghai`'),
@@ -127,7 +134,15 @@ export const Config: Schema<Config> = Schema.intersect([
       .max(64)
       .default(8)
       .description('**单张图片上限**<br>单位 MB'),
-  }).description('图片设置'),
+    enableFiles: Schema.boolean()
+      .default(true)
+      .description('**收发文件**<br>接收聊天里的文件并提交给 DSH，也可用 dsh.get 取回工作区文件'),
+    maxFileMb: Schema.natural()
+      .min(1)
+      .max(200)
+      .default(20)
+      .description('**单个文件上限**<br>单位 MB'),
+  }).description('附件设置'),
 
   Schema.object({
     debug: Schema.boolean()
@@ -148,6 +163,7 @@ export function normalizeConfig(config: Config): Config {
     promptTimeout: Math.max(10, Math.min(3600, config.promptTimeout ?? 600)),
     historyLimit: Math.max(1, Math.min(50, config.historyLimit ?? 5)),
     sessionLimit: Math.max(1, Math.min(200, config.sessionLimit ?? 20)),
+    defaultWorkspace: (config.defaultWorkspace ?? '').trim(),
     clientTimeZone: (config.clientTimeZone ?? '').trim() || 'Asia/Shanghai',
     replyFormat: config.replyFormat === 'markdown' ? 'markdown' : 'text',
     allowUsers: (config.allowUsers ?? []).map((id) => String(id).trim()).filter(Boolean),
@@ -160,6 +176,8 @@ export function normalizeConfig(config: Config): Config {
     enableImages: config.enableImages ?? true,
     maxImages: Math.max(0, Math.min(20, config.maxImages ?? 6)),
     maxImageMb: Math.max(1, Math.min(64, config.maxImageMb ?? 8)),
+    enableFiles: config.enableFiles ?? true,
+    maxFileMb: Math.max(1, Math.min(200, config.maxFileMb ?? 20)),
     debug: config.debug ?? false,
   }
 }

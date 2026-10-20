@@ -3,15 +3,19 @@ import type { Config } from './config'
 import {
   checkAccess,
   handleApproval,
+  handleGet,
   handleHistory,
+  handleModel,
   handleNew,
   handlePing,
   handlePermission,
   handleRun,
   handleSessions,
   handleStop,
+  handleThink,
   handleUse,
   handleWhoami,
+  handleWorkspaces,
   renderReply,
   type HandlerDeps,
 } from './handlers'
@@ -21,11 +25,15 @@ const HELP_TEXT = [
   '可用指令',
   '· dsh.ping：连接状态与当前绑定',
   '· dsh.sessions：会话列表，加 -a 显示全部',
-  '· dsh.new [目录]：新建并绑定会话',
+  '· dsh.new [目录/序号]：新建并绑定会话',
+  '· dsh.workspaces：列出已知工作区',
   '· dsh.use 序号：按序号或 ID 绑定',
   '· dsh.run 内容：交给 DSH 执行',
   '· dsh.stop：停止当前任务',
   '· dsh.history [条数]：回放最近回复',
+  '· dsh.model [序号] [等级]：查看或切换模型',
+  '· dsh.think [等级]：调整思考等级',
+  '· dsh.get 路径：取回工作区文件',
   '· dsh.permission [预设]：查看或切换权限',
   '· dsh.approve / dsh.deny：处理授权',
   '· dsh.whoami：查看自己的标识',
@@ -86,12 +94,47 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     .example('dsh.sessions -a')
     .action(({ session, options }) => action(session, (session) => handleSessions(deps, session, options?.all ?? false)))
 
-  ctx.command('dsh.new [cwd:string]', '新建并绑定 DSH 会话')
+  ctx.command('dsh.new [target:string]', '新建并绑定 DSH 会话')
     .alias('dsh新建')
-    .usage('不带参数时使用 DSH 的默认工作目录；带参数时在该目录创建会话。')
+    .usage(
+      '参数可以是 dsh.workspaces 里的序号、绝对路径，或省略。\n' +
+      '省略时使用配置项 defaultWorkspace，未配置则用 DSH 默认目录。',
+    )
     .example('dsh.new')
+    .example('dsh.new 2')
     .example('dsh.new D:\\AI\\workspace')
-    .action(({ session }, cwd) => action(session, (session) => handleNew(deps, session, cwd ?? undefined)))
+    .action(({ session }, target) => action(session, (session) => handleNew(deps, session, target ?? undefined)))
+
+  ctx.command('dsh.workspaces', '列出已知工作区')
+    .alias('dsh工作区')
+    .usage('按现有会话的目录归纳，按最近使用排序；可直接把序号交给 dsh.new。')
+    .action(({ session }) => action(session, () => handleWorkspaces(deps)))
+
+  ctx.command('dsh.model [target:string] [effort:string]', '查看或切换模型')
+    .alias('dsh模型')
+    .usage(
+      '不带参数列出可用模型与当前选择。\n' +
+      '带序号或模型名切换，第二个参数可同时设置思考等级（off / low / high / max）。',
+    )
+    .example('dsh.model')
+    .example('dsh.model 2')
+    .example('dsh.model 2 max')
+    .action(({ session }, target, effort) =>
+      action(session, (session) => handleModel(deps, session, target ?? undefined, effort ?? undefined)),
+    )
+
+  ctx.command('dsh.think [effort:string]', '调整思考等级')
+    .alias('dsh思考')
+    .usage('只改思考等级，模型保持不变；不带参数查看当前等级与可选值。')
+    .example('dsh.think')
+    .example('dsh.think high')
+    .action(({ session }, effort) => action(session, (session) => handleThink(deps, session, effort ?? undefined)))
+
+  ctx.command('dsh.get <path:string>', '取回工作区里的文件')
+    .alias('dsh取文件')
+    .usage('路径相对当前会话的工作区，例如 src/index.ts。单个文件受配置项 maxFileMb 限制。')
+    .example('dsh.get dist/report.md')
+    .action(({ session }, path) => action(session, (session) => handleGet(deps, session, path ?? undefined)))
 
   ctx.command('dsh.use <target:string>', '绑定已有 DSH 会话')
     .alias('dsh切换')

@@ -18,6 +18,40 @@ export interface SessionListOptions {
     includeChildren?: boolean;
     includeBlank?: boolean;
 }
+/** 聊天里收到的文件，上传到 DSH 后换成凭据再提交 */
+export interface TurnFile {
+    receiptId: string;
+    name: string;
+}
+/** DSH 可路由的模型，按 provider 分组展开 */
+export interface DshModelOption {
+    provider: string;
+    providerName: string;
+    model: string;
+    name: string;
+    description?: string;
+    efforts: Array<{
+        id: string;
+        name: string;
+        description?: string;
+    }>;
+    defaultEffort?: string;
+}
+export interface DshModelSelection {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+}
+export interface DshModelCatalog {
+    models: DshModelOption[];
+    /** 部署默认选择，新会话尚未指定模型时用它兜底 */
+    defaultSelection?: DshModelSelection;
+}
+export interface DshWorkspaceEntry {
+    name: string;
+    type: string;
+    size?: number;
+}
 export interface TurnResult {
     text: string;
     images: TurnImage[];
@@ -64,6 +98,8 @@ export declare class DshClient {
     private getCookieForBridge;
     private startBridge;
     private rawRpc;
+    /** 结果带二进制的接口走 multipart，重试策略与普通 RPC 一致 */
+    private rpcMultipart;
     rpc(method: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
     /**
      * 会话列表，按最后修改时间倒序。
@@ -83,15 +119,30 @@ export declare class DshClient {
     currentPermission(sessionId: string): Promise<string | undefined>;
     /** 切权限没有独立 RPC，走官方 `/permission` 斜杠命令 */
     setPermission(sessionId: string, preset: string): Promise<void>;
+    /** 全部可路由模型，按 provider 分组展开成一维；附带部署默认选择 */
+    modelCatalog(): Promise<DshModelCatalog>;
+    /** 会话当前生效的模型与思考等级；`next` 是下一次生效的选择 */
+    modelSelection(sessionId: string): Promise<DshModelSelection | undefined>;
+    selectModel(sessionId: string, provider: string, model: string, reasoningEffort?: string): Promise<void>;
+    /** 把聊天里的文件上传到会话，返回可直接放进 prompt 的凭据 */
+    uploadFile(sessionId: string, name: string, mediaType: string, buffer: Buffer): Promise<string>;
+    /** 列会话工作区里的目录内容 */
+    listWorkspace(sessionId: string, path: string): Promise<DshWorkspaceEntry[]>;
+    /** 读会话工作区里的一个文件；超出上限时报错而不是截断 */
+    readWorkspaceFile(sessionId: string, path: string, maxBytes: number): Promise<{
+        name: string;
+        buffer: Buffer;
+        bytes: number;
+    }>;
     cursor(sessionId: string): Promise<number>;
     page(sessionId: string, throughSeq: number, maxMessages?: number): Promise<unknown[]>;
-    prompt(sessionId: string, text: string, images?: TurnImage[]): Promise<void>;
+    prompt(sessionId: string, text: string, images?: TurnImage[], files?: TurnFile[]): Promise<void>;
     cancel(sessionId: string): Promise<void>;
     history(sessionId: string, limit: number): Promise<string[]>;
     /** 取出 `baseline` 之后的事件，按 seq 升序排列；分页返回的顺序不作假设 */
     private pageEvents;
     /** 提交一轮任务并等待 `turn/end`，中间步骤的 assistant 消息不并入最终结果 */
-    runTurn(sessionId: string, text: string, images?: TurnImage[]): Promise<TurnResult>;
+    runTurn(sessionId: string, text: string, images?: TurnImage[], files?: TurnFile[]): Promise<TurnResult>;
     awaitTurn(sessionId: string, baseline: number): Promise<TurnResult>;
     /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
     private resolveImages;

@@ -3,6 +3,12 @@ export interface TurnImage {
     buffer: Buffer;
     type: string;
 }
+/** 聊天里收到的文件，按原样交给 DSH */
+export interface IncomingFile {
+    buffer: Buffer;
+    name: string;
+    mediaType: string;
+}
 export interface ExtractedContent {
     text: string;
     images: string[];
@@ -28,3 +34,7 @@ export declare function decodeAttachment(data: string, mediaType: string): TurnI
  * 各适配器给的形态不一样：QQ 常是 http(s) 链接，本地适配器可能给 `file://` 或绝对路径。
  */
 export declare function loadImageSource(source: string, maxBytes: number, timeoutMs: number): Promise<TurnImage | null>;
+/** 文件名去掉路径与危险字符，避免写盘时逃出目标目录 */
+export declare function sanitizeFileName(name: string): string;
+/** 读取聊天里文件元素指向的内容：支持 data URI、http(s) 与本地绝对路径 */
+export declare function loadFileSource(source: string, name: string, maxBytes: number, timeoutMs: number): Promise<IncomingFile | null>;

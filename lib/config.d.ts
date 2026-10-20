@@ -13,12 +13,16 @@ export interface Config {
     allowUsers: string[];
     /** 新建会话后自动切换到的权限预设；空串表示沿用 DSH 默认 */
     defaultPermission: string;
+    /** 新建会话使用的工作区；空串表示用 DSH 默认目录 */
+    defaultWorkspace: string;
     mergeForward: boolean;
     splitLength: number;
     chunkLength: number;
     enableImages: boolean;
     maxImages: number;
     maxImageMb: number;
+    enableFiles: boolean;
+    maxFileMb: number;
     debug: boolean;
 }
 export declare const Config: Schema<Config>;

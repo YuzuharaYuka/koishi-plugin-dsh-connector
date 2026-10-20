@@ -17,11 +17,15 @@ export const usage = `
 | :--- | :--- | :--- |
 | \`dsh.ping\` | \`dsh状态\` | 连接状态与当前绑定 |
 | \`dsh.sessions\` | \`dsh会话\` | 会话列表，加 \`-a\` 显示全部 |
-| \`dsh.new [目录]\` | \`dsh新建\` | 新建并绑定会话 |
+| \`dsh.new [目录/序号]\` | \`dsh新建\` | 新建并绑定会话 |
+| \`dsh.workspaces\` | \`dsh工作区\` | 列出已知工作区 |
 | \`dsh.use 序号\` | \`dsh切换\` | 按序号或 ID 绑定 |
 | \`dsh.run 内容\` | \`dsh运行\` | 交给 DSH 执行 |
 | \`dsh.stop\` | \`dsh停止\` | 停止当前任务 |
 | \`dsh.history [条数]\` | \`dsh历史\` | 回放最近回复 |
+| \`dsh.model [序号] [等级]\` | \`dsh模型\` | 查看或切换模型与思考等级 |
+| \`dsh.think [等级]\` | \`dsh思考\` | 只调整思考等级 |
+| \`dsh.get 路径\` | \`dsh取文件\` | 取回工作区里的文件 |
 | \`dsh.permission [预设]\` | \`dsh权限\` | 查看或切换权限预设 |
 | \`dsh.approve\` / \`dsh.deny\` | \`dsh允许\` / \`dsh拒绝\` | 处理授权 |
 | \`dsh.whoami\` | \`dsh我是谁\` | 查看自己的标识 |
