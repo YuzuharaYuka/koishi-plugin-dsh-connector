@@ -46,6 +46,7 @@ export declare const MESSAGES: {
     readonly noPendingApproval: "当前没有等待处理的授权请求。";
     readonly promptAccepted: "已提交到 DeepSeek Harness，正在执行……";
     readonly busy: "这个聊天还有任务在执行，等它结束或先发 dsh.stop。";
+    readonly attachmentsBuffered: (images: number, files: number) => string;
     readonly promptTimedOut: "等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。";
     readonly stopRequested: "已请求停止当前任务。";
     readonly sessionCreated: "已创建并绑定新的 DSH 会话。";

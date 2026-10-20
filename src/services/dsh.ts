@@ -392,13 +392,24 @@ export class DshClient {
 
   /** 会话当前生效的权限预设 */
   async currentPermission(sessionId: string): Promise<string | undefined> {
+    return (await this.sessionSnapshot(sessionId)).permission
+  }
+
+  /** 一次 projections 取回状态面板需要的字段 */
+  async sessionSnapshot(
+    sessionId: string,
+  ): Promise<{ permission?: string; model?: DshModelSelection }> {
     const value = (await this.rpc('session/projections', { request: { sessionId } })) as {
       values?: Record<string, unknown>
     }
-    const permissions = ((value.values ?? {}) as Record<string, unknown>).permissions
-    if (!permissions || typeof permissions !== 'object') return undefined
-    const current = (permissions as Record<string, unknown>).currentValue
-    return typeof current === 'string' ? current : undefined
+    const values = (value.values ?? {}) as Record<string, unknown>
+    const permissions = values.permissions as Record<string, unknown> | undefined
+    const selection = values.modelSelection as Record<string, unknown> | undefined
+    return {
+      permission:
+        typeof permissions?.currentValue === 'string' ? permissions.currentValue : undefined,
+      model: toModelSelection(selection?.next ?? selection?.lastUsed),
+    }
   }
 
   /** 切权限没有独立 RPC，走官方 `/permission` 斜杠命令 */

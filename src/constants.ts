@@ -75,6 +75,12 @@ export const MESSAGES = {
 
   promptAccepted: '已提交到 DeepSeek Harness，正在执行……',
   busy: '这个聊天还有任务在执行，等它结束或先发 dsh.stop。',
+  attachmentsBuffered: (images: number, files: number) => {
+    const parts: string[] = []
+    if (images > 0) parts.push(`${images} 张图片`)
+    if (files > 0) parts.push(`${files} 个文件`)
+    return `已暂存 ${parts.join('、')}，下一条 dsh.run 会一起提交。`
+  },
   promptTimedOut: '等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。',
 
   stopRequested: '已请求停止当前任务。',

@@ -12,7 +12,7 @@ npm i koishi-plugin-dsh-connector
 
 | 指令 | 说明 |
 | :--- | :--- |
-| `dsh.ping` | 连接状态与当前绑定 |
+| `dsh.ping` | 连接状态、工作区、模型、权限与任务状态 |
 | `dsh.sessions` | 会话列表，`-a` 显示全部 |
 | `dsh.new [目录/序号]` | 新建并绑定会话，可指定工作区 |
 | `dsh.workspaces` | 列出已知工作区 |
@@ -32,6 +32,7 @@ npm i koishi-plugin-dsh-connector
 - `dsh.new` 不带参数时使用配置项 `defaultWorkspace`，也可给序号或绝对路径。
 - 思考等级为 `off` / `low` / `high` / `max`，切换模型时未指定等级会沿用当前值。
 - `dsh.run` 会提交消息附带的图片和文件，回复里的图片也会回传；长回复自动分段或合并转发。
+- QQ 无法把文字和文件放在同一条消息里：单独发出的附件会暂存 10 分钟，下一条 `dsh.run` 一起提交。
 - `dsh.whoami` 不受白名单限制，被拒绝时可用它取到自己的标识。
 
 ## 配置

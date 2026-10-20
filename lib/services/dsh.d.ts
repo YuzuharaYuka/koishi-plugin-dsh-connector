@@ -117,6 +117,11 @@ export declare class DshClient {
     permissionPresets(): Promise<string[]>;
     /** 会话当前生效的权限预设 */
     currentPermission(sessionId: string): Promise<string | undefined>;
+    /** 一次 projections 取回状态面板需要的字段 */
+    sessionSnapshot(sessionId: string): Promise<{
+        permission?: string;
+        model?: DshModelSelection;
+    }>;
     /** 切权限没有独立 RPC，走官方 `/permission` 斜杠命令 */
     setPermission(sessionId: string, preset: string): Promise<void>;
     /** 全部可路由模型，按 provider 分组展开成一维；附带部署默认选择 */
