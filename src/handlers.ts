@@ -7,15 +7,18 @@ import type { Config } from './config'
 import { FORWARD_PLATFORMS, MESSAGES, effortLabel, presetLabel } from './constants'
 import { toPlainText, stripChatMarkup } from './core/markdown'
 import { loadFileSource, loadImageSource, sanitizeFileName, type TurnImage } from './core/media'
+import { estimateCost, formatCost, formatNumber, totalTokens } from './core/pricing'
 import { splitText } from './core/text'
 import {
   DshTurnTimeout,
   type ApprovalDecision,
+  type BalanceInfo,
   type DshClient,
   type DshModelOption,
   type DshModelSelection,
   type DshSessionSummary,
   type TurnFile,
+  type TurnResult,
 } from './services/dsh'
 import { bindingKey, type BindingStore, type ChannelBinding } from './services/store'
 import { getErrorMessage, logger, truncate } from './utils'
@@ -246,6 +249,8 @@ export async function handlePing(deps: HandlerDeps, session: Session): Promise<s
     logger.debug(`[ping] 读取会话状态失败: ${getErrorMessage(error)}`)
   }
 
+  const notice = await balanceNotice(deps)
+  if (notice) lines.push(notice)
   return lines.join('\n')
 }
 
@@ -299,6 +304,67 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
     lines.push(`按修改时间排序，只显示最近 ${sessions.length} 个；加 -a 查看全部。`)
   }
   lines.push('用 dsh.use 序号绑定。')
+  return lines.join('\n')
+}
+
+/** 本轮 token 用量与估算费用 */
+function usageText(config: Config, result: TurnResult): string | undefined {
+  if (!config.showUsage) return undefined
+  const usage = result.usage
+  if (totalTokens(usage) === 0) return undefined
+
+  const input = usage.uncachedInputTokens + usage.cacheWriteTokens
+  const segments = [
+    `输入 ${formatNumber(input)}`,
+    `缓存命中 ${formatNumber(usage.cacheReadTokens)}`,
+    `输出 ${formatNumber(usage.outputTokens)}`,
+  ]
+  let text = `本轮用量：${segments.join(' · ')}`
+  if (config.showCost && result.model) {
+    const cost = estimateCost(usage, result.model)
+    if (cost !== undefined) text += `，估算 ${formatCost(cost)}`
+  }
+  return text
+}
+
+function totalBalance(info: BalanceInfo): number {
+  return [...info.wallets, ...info.bonusWallets].reduce((sum, item) => sum + item.balance, 0)
+}
+
+/** 余额低于告警线时给一句话；未配置或读取失败都静默 */
+async function balanceNotice(deps: HandlerDeps): Promise<string | undefined> {
+  const threshold = deps.config.balanceWarning
+  if (threshold <= 0) return undefined
+  try {
+    const info = await deps.client.accountBalance()
+    if (!info) return undefined
+    const total = totalBalance(info)
+    if (total >= threshold) return undefined
+    return MESSAGES.balanceLow(`¥${total.toFixed(2)}`, threshold)
+  } catch {
+    return undefined
+  }
+}
+
+/** 查看账户余额 */
+export async function handleBalance(deps: HandlerDeps): Promise<string> {
+  let info: BalanceInfo | undefined
+  try {
+    info = await deps.client.accountBalance()
+  } catch (error) {
+    return `读取余额失败：${getErrorMessage(error)}`
+  }
+  if (!info) return MESSAGES.balanceUnavailable
+
+  const symbol = info.wallets[0]?.currency === 'USD' ? '$' : '¥'
+  const lines = ['账户余额']
+  for (const item of info.wallets) lines.push(`充值余额：${symbol}${item.balance.toFixed(2)}`)
+  for (const item of info.bonusWallets) lines.push(`赠送余额：${symbol}${item.balance.toFixed(2)}`)
+
+  const threshold = deps.config.balanceWarning
+  if (threshold > 0 && totalBalance(info) < threshold) {
+    lines.push(MESSAGES.balanceLow(`${symbol}${totalBalance(info).toFixed(2)}`, threshold))
+  }
   return lines.join('\n')
 }
 
@@ -448,6 +514,13 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
 
       for (const image of result.images) parts.push(h.image(image.buffer, image.type))
       if (result.skipped > 0) parts.push(MESSAGES.imagesSkipped(result.skipped))
+
+      const usage = usageText(deps.config, result)
+      if (usage) parts.push(parts.length > 0 ? `\n\n${usage}` : usage)
+
+      const notice = await balanceNotice(deps)
+      if (notice) parts.push(parts.length > 0 ? `\n${notice}` : notice)
+
       if (parts.length === 0) return longPath ? '' : MESSAGES.noContent
       return parts
     } catch (error) {

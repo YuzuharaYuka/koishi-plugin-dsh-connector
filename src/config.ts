@@ -25,6 +25,12 @@ export interface Config {
   maxImageMb: number
   enableFiles: boolean
   maxFileMb: number
+  /** 每轮回复后附带 token 用量 */
+  showUsage: boolean
+  /** 用量里同时给出估算费用 */
+  showCost: boolean
+  /** 余额低于该值时提醒；0 表示关闭 */
+  balanceWarning: number
   debug: boolean
 }
 
@@ -145,6 +151,21 @@ export const Config: Schema<Config> = Schema.intersect([
   }).description('附件设置'),
 
   Schema.object({
+    showUsage: Schema.boolean()
+      .default(true)
+      .description('**显示用量**<br>每轮回复后附带本次的 token 消耗'),
+    showCost: Schema.boolean()
+      .default(true)
+      .description('**估算费用**<br>按官方价目表换算本轮花费，模型未知时不显示'),
+    balanceWarning: Schema.number()
+      .min(0)
+      .max(10000)
+      .step(1)
+      .default(0)
+      .description('**余额告警**<br>低于该金额（元）时提醒；`0` 表示关闭'),
+  }).description('用量与余额'),
+
+  Schema.object({
     debug: Schema.boolean()
       .default(false)
       .description('**调试日志**<br>输出 RPC、端口发现与未识别事件帧'),
@@ -178,6 +199,9 @@ export function normalizeConfig(config: Config): Config {
     maxImageMb: Math.max(1, Math.min(64, config.maxImageMb ?? 8)),
     enableFiles: config.enableFiles ?? true,
     maxFileMb: Math.max(1, Math.min(200, config.maxFileMb ?? 20)),
+    showUsage: config.showUsage ?? true,
+    showCost: config.showCost ?? true,
+    balanceWarning: Math.max(0, Math.min(10000, config.balanceWarning ?? 0)),
     debug: config.debug ?? false,
   }
 }

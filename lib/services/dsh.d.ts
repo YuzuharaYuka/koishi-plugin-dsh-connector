@@ -1,6 +1,7 @@
 import type { Config } from '../config';
 import { type TurnImage } from '../core/media';
 import { type ApprovalRequest } from '../core/mux';
+import { type TokenUsage } from '../core/pricing';
 export type ApprovalDecision = 'allow' | 'deny';
 export interface DshSessionSummary {
     sessionId: string;
@@ -52,12 +53,26 @@ export interface DshWorkspaceEntry {
     type: string;
     size?: number;
 }
+export interface BalanceWallet {
+    currency: string;
+    balance: number;
+}
+export interface BalanceInfo {
+    /** 充值余额 */
+    wallets: BalanceWallet[];
+    /** 赠送余额 */
+    bonusWallets: BalanceWallet[];
+}
 export interface TurnResult {
     text: string;
     images: TurnImage[];
     /** 未能取回或超出上限的图片数量，用于如实告知用户 */
     skipped: number;
     seq: number;
+    /** 本轮消耗的 token（快照相减） */
+    usage: TokenUsage;
+    /** 本轮实际使用的模型，用于估算费用 */
+    model?: string;
 }
 /** 等待超时时带上已经看到的最后一段回复，避免整段丢弃 */
 export declare class DshTurnTimeout extends Error {
@@ -148,7 +163,13 @@ export declare class DshClient {
     private pageEvents;
     /** 提交一轮任务并等待 `turn/end`，中间步骤的 assistant 消息不并入最终结果 */
     runTurn(sessionId: string, text: string, images?: TurnImage[], files?: TurnFile[]): Promise<TurnResult>;
-    awaitTurn(sessionId: string, baseline: number): Promise<TurnResult>;
+    /** 会话当前模型 ID；没有选择时用部署默认值 */
+    private currentModelName;
+    /** 会话累计的 token 用量 */
+    tokenUsage(sessionId: string): Promise<TokenUsage>;
+    /** 账户余额；未登录平台账号时返回 undefined */
+    accountBalance(): Promise<BalanceInfo | undefined>;
+    awaitTurn(sessionId: string, baseline: number): Promise<Omit<TurnResult, 'usage' | 'model'>>;
     /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
     private resolveImages;
     private readAttachment;

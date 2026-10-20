@@ -23,6 +23,12 @@ export interface Config {
     maxImageMb: number;
     enableFiles: boolean;
     maxFileMb: number;
+    /** 每轮回复后附带 token 用量 */
+    showUsage: boolean;
+    /** 用量里同时给出估算费用 */
+    showCost: boolean;
+    /** 余额低于该值时提醒；0 表示关闭 */
+    balanceWarning: number;
     debug: boolean;
 }
 export declare const Config: Schema<Config>;

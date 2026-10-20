@@ -13,6 +13,7 @@ import { decodeAttachment, extractContent, fetchImage, type TurnImage } from '..
 import { EventBridge, type ApprovalRequest } from '../core/mux'
 import { DshRpcError, callRpc, callRpcMultipart } from '../core/rpc'
 import { logger, normalizeTimeZone, sleep } from '../utils'
+import { diffUsage, EMPTY_USAGE, type TokenUsage } from '../core/pricing'
 
 const AUTH_TIMEOUT_MS = 15000
 const RPC_TIMEOUT_MS = 30000
@@ -76,12 +77,28 @@ export interface DshWorkspaceEntry {
   size?: number
 }
 
+export interface BalanceWallet {
+  currency: string
+  balance: number
+}
+
+export interface BalanceInfo {
+  /** 充值余额 */
+  wallets: BalanceWallet[]
+  /** 赠送余额 */
+  bonusWallets: BalanceWallet[]
+}
+
 export interface TurnResult {
   text: string
   images: TurnImage[]
   /** 未能取回或超出上限的图片数量，用于如实告知用户 */
   skipped: number
   seq: number
+  /** 本轮消耗的 token（快照相减） */
+  usage: TokenUsage
+  /** 本轮实际使用的模型，用于估算费用 */
+  model?: string
 }
 
 interface SequencedEvent {
@@ -607,11 +624,66 @@ export class DshClient {
     files: TurnFile[] = [],
   ): Promise<TurnResult> {
     const baseline = await this.cursor(sessionId)
+    const usageBefore = await this.tokenUsage(sessionId)
+    const model = await this.currentModelName(sessionId)
+
     await this.prompt(sessionId, text, images, files)
-    return this.awaitTurn(sessionId, baseline)
+    const base = await this.awaitTurn(sessionId, baseline)
+    const usageAfter = await this.tokenUsage(sessionId)
+    return { ...base, usage: diffUsage(usageAfter, usageBefore), model }
   }
 
-  async awaitTurn(sessionId: string, baseline: number): Promise<TurnResult> {
+  /** 会话当前模型 ID；没有选择时用部署默认值 */
+  private async currentModelName(sessionId: string): Promise<string | undefined> {
+    const selection = await this.modelSelection(sessionId)
+    if (selection) return selection.model
+    const catalog = await this.modelCatalog().catch(() => undefined)
+    return catalog?.defaultSelection?.model
+  }
+
+  /** 会话累计的 token 用量 */
+  async tokenUsage(sessionId: string): Promise<TokenUsage> {
+    const value = (await this.rpc('session/projections', { request: { sessionId } })) as {
+      values?: Record<string, unknown>
+    }
+    const usage = ((value.values ?? {}) as Record<string, unknown>).tokenUsage as
+      | Record<string, unknown>
+      | undefined
+    return {
+      uncachedInputTokens: Number(usage?.uncachedInputTokens ?? 0),
+      outputTokens: Number(usage?.outputTokens ?? 0),
+      cacheReadTokens: Number(usage?.cacheReadTokens ?? 0),
+      cacheWriteTokens: Number(usage?.cacheWriteTokens ?? 0),
+    }
+  }
+
+  /** 账户余额；未登录平台账号时返回 undefined */
+  async accountBalance(): Promise<BalanceInfo | undefined> {
+    const value = (await this.rpc('account/getBalance', {
+      client: {
+        version: '0.2.0',
+        locale: 'zh-CN',
+        timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+      },
+    })) as {
+      status?: string
+      value?: Array<{ currency?: string; balance?: string }>
+      bonusWallets?: Array<{ currency?: string; balance?: string }>
+    } | null
+
+    if (!value || value.status !== 'ready') return undefined
+
+    const toWallet = (item: { currency?: string; balance?: string }) => ({
+      currency: String(item.currency ?? 'CNY'),
+      balance: Number(item.balance ?? 0),
+    })
+    return {
+      wallets: (value.value ?? []).map(toWallet),
+      bonusWallets: (value.bonusWallets ?? []).map(toWallet),
+    }
+  }
+
+  async awaitTurn(sessionId: string, baseline: number): Promise<Omit<TurnResult, 'usage' | 'model'>> {
     const deadline = Date.now() + this.config.promptTimeout * 1000
     let lastSeen = ''
     let lastCursor = baseline

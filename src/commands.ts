@@ -3,6 +3,7 @@ import type { Config } from './config'
 import {
   checkAccess,
   handleApproval,
+  handleBalance,
   handleGet,
   handleHistory,
   handleModel,
@@ -34,6 +35,7 @@ const HELP_TEXT = [
   '· dsh.model [序号] [等级]：查看或切换模型',
   '· dsh.think [等级]：调整思考等级',
   '· dsh.get 路径：取回工作区文件',
+  '· dsh.balance：查看账户余额',
   '· dsh.permission [预设]：查看或切换权限',
   '· dsh.approve / dsh.deny：处理授权',
   '· dsh.whoami：查看自己的标识',
@@ -136,6 +138,11 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     .example('dsh.get dist/report.md')
     .action(({ session }, path) => action(session, (session) => handleGet(deps, session, path ?? undefined)))
 
+  ctx.command('dsh.balance', '查看账户余额')
+    .alias('dsh余额')
+    .usage('读取 DSH 登录的 DeepSeek 平台账户余额；未登录平台账号时不可用。')
+    .action(({ session }) => action(session, () => handleBalance(deps)))
+
   ctx.command('dsh.use <target:string>', '绑定已有 DSH 会话')
     .alias('dsh切换')
     .usage('参数可以是 dsh.sessions 里的序号，也可以是完整会话 ID 或能唯一匹配的前缀。')
@@ -164,8 +171,7 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     .example('dsh.history 3')
     .action(({ session }, count) => action(session, (session) => handleHistory(deps, session, count)))
 
-  ctx.command('dsh.permission [preset:string]', '查看或切换权限预设')
-    .alias('dsh权限')
+  ctx.command('dsh.permission [preset:string]', '查看或切换权限预设')    .alias('dsh权限')
     .usage(
       '预设同时决定沙箱模式与审批策略：\n' +
       'read-only 仅可查看、workspace-write 工作区可写、danger-full-access 完全权限、auto 自动审查。\n' +

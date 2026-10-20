@@ -26,6 +26,7 @@ export const usage = `
 | \`dsh.model [序号] [等级]\` | \`dsh模型\` | 查看或切换模型与思考等级 |
 | \`dsh.think [等级]\` | \`dsh思考\` | 只调整思考等级 |
 | \`dsh.get 路径\` | \`dsh取文件\` | 取回工作区里的文件 |
+| \`dsh.balance\` | \`dsh余额\` | 查看账户余额 |
 | \`dsh.permission [预设]\` | \`dsh权限\` | 查看或切换权限预设 |
 | \`dsh.approve\` / \`dsh.deny\` | \`dsh允许\` / \`dsh拒绝\` | 处理授权 |
 | \`dsh.whoami\` | \`dsh我是谁\` | 查看自己的标识 |

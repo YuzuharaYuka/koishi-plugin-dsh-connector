@@ -100,6 +100,9 @@ export const MESSAGES = {
   noWorkspace: '还没有可用的工作区，用 dsh.new 加路径新建一个。',
   workspaceMissing: (value: string) => `没有找到工作区：${value}`,
 
+  balanceUnavailable: '读不到账户余额：DSH 可能未登录 DeepSeek 平台账号。',
+  balanceLow: (value: string, threshold: number) => `余额提醒：当前 ${value}，低于告警线 ${threshold} 元。`,
+
   getUsage: '用法：dsh.get 相对路径，例如 dsh.get src/index.ts。',
   fileTooLarge: (mb: number) => `文件超过 ${mb} MB 上限，没有发送。`,
   filesSkipped: (count: number) => `有 ${count} 个文件未能读取或超出上限。`,

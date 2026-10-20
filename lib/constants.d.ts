@@ -64,6 +64,8 @@ export declare const MESSAGES: {
     readonly noEffortChoice: "这个模型不支持调整思考等级。";
     readonly noWorkspace: "还没有可用的工作区，用 dsh.new 加路径新建一个。";
     readonly workspaceMissing: (value: string) => string;
+    readonly balanceUnavailable: "读不到账户余额：DSH 可能未登录 DeepSeek 平台账号。";
+    readonly balanceLow: (value: string, threshold: number) => string;
     readonly getUsage: "用法：dsh.get 相对路径，例如 dsh.get src/index.ts。";
     readonly fileTooLarge: (mb: number) => string;
     readonly filesSkipped: (count: number) => string;

@@ -28,6 +28,8 @@ export declare function handleWhoami(deps: HandlerDeps, session: Session): strin
 export declare function renderReply(config: Config, text: string): string;
 export declare function handlePing(deps: HandlerDeps, session: Session): Promise<string>;
 export declare function handleSessions(deps: HandlerDeps, session: Session, includeAll?: boolean): Promise<string>;
+/** 查看账户余额 */
+export declare function handleBalance(deps: HandlerDeps): Promise<string>;
 export interface WorkspaceEntry {
     cwd: string;
     count: number;

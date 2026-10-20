@@ -23,6 +23,7 @@ npm i koishi-plugin-dsh-connector
 | `dsh.model [序号] [等级]` | 查看或切换模型与思考等级 |
 | `dsh.think [等级]` | 只调整思考等级 |
 | `dsh.get 路径` | 取回工作区里的文件 |
+| `dsh.balance` | 查看账户余额 |
 | `dsh.permission [预设]` | 查看或切换权限预设 |
 | `dsh.approve` / `dsh.deny` | 处理授权请求 |
 | `dsh.whoami` | 查看自己的用户标识 |
@@ -32,6 +33,7 @@ npm i koishi-plugin-dsh-connector
 - `dsh.new` 不带参数时使用配置项 `defaultWorkspace`，也可给序号或绝对路径。
 - 思考等级为 `off` / `low` / `high` / `max`，切换模型时未指定等级会沿用当前值。
 - `dsh.run` 会提交消息附带的图片和文件，回复里的图片也会回传；长回复自动分段或合并转发。
+- `dsh.balance` 读取 DSH 登录的 DeepSeek 平台账户余额。DSH 没有花费接口，`showCost` 是按官方价目表（区分缓存命中与高峰时段）对 token 的估算，仅供参考。
 - QQ 无法把文字和文件放在同一条消息里：引用一条带附件的消息再发 `dsh.run`，该附件会一起提交。
 - `dsh.whoami` 不受白名单限制，被拒绝时可用它取到自己的标识。
 
@@ -60,6 +62,9 @@ npm i koishi-plugin-dsh-connector
 | `maxImageMb` | `8` | 单张图片体积上限（MB） |
 | `enableFiles` | `true` | 收发文件 |
 | `maxFileMb` | `20` | 单个文件体积上限（MB） |
+| `showUsage` | `true` | 每轮回复后附带 token 用量 |
+| `showCost` | `true` | 用量里同时给出估算费用 |
+| `balanceWarning` | `0` | 余额低于该金额（元）时提醒，`0` 表示关闭 |
 | `debug` | `false` | 输出调试日志 |
 
 运行依赖 `ws`，用于接收 DSH 的授权请求。
