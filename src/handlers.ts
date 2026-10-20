@@ -30,7 +30,7 @@ const MAX_INCOMING_FILES = 5
 /** 发送用的临时文件保留时长 */
 const TEMP_FILE_TTL_MS = 3600_000
 /** 提问等待回答的时长 */
-const QUESTION_TTL_MS = 10 * 60 * 1000
+const QUESTION_TTL_MS = 5 * 60 * 1000
 /** 超时补发最多再等多久 */
 const DEFERRED_TIMEOUT_MS = 30 * 60 * 1000
 
@@ -521,6 +521,8 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
 
     try {
       const result = await deps.client.runTurn(binding.sessionId, input, images, files)
+      // 回合结束，任何还挂着的提问都已失效（可能在 Web 界面答过）
+      deps.questions.delete(key)
       const parts: (string | ReturnType<typeof h.image>)[] = []
       const output = renderReply(deps.config, result.text)
       const chunks = output ? splitText(output, deps.config.chunkLength) : []
@@ -561,6 +563,7 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
 export async function handleStop(deps: HandlerDeps, session: Session): Promise<string> {
   const binding = bindingOf(deps, session)
   if (!binding) return MESSAGES.noBinding
+  deps.questions.delete(sessionKey(session))
   await deps.client.cancel(binding.sessionId)
   return MESSAGES.stopRequested
 }
