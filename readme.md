@@ -18,6 +18,9 @@ npm i koishi-plugin-dsh-connector
 | `dsh.workspaces` | 列出已知工作区 |
 | `dsh.use 序号` | 按序号或会话 ID 绑定 |
 | `dsh.run 内容` | 下发任务并等待结果 |
+| `dsh.steer 内容` | 往运行中的任务补充指令 |
+| `dsh.compact` / `dsh.clear` | 压缩或清空上下文 |
+| `dsh.chat on/off` | 私聊自然语言模式 |
 | `dsh.stop` | 停止当前任务 |
 | `dsh.history [条数]` | 回放最近的回复 |
 | `dsh.model [序号] [等级]` | 查看或切换模型与思考等级 |
@@ -35,6 +38,9 @@ npm i koishi-plugin-dsh-connector
 - `dsh.run` 会提交消息附带的图片和文件，回复里的图片也会回传；长回复自动分段或合并转发。
 - `dsh.balance` 读取 DSH 登录的 DeepSeek 平台账户余额。DSH 没有花费接口，`showCost` 是按官方价目表（区分缓存命中与高峰时段）对 token 的估算，仅供参考。
 - QQ 无法把文字和文件放在同一条消息里：引用一条带附件的消息再发 `dsh.run`，该附件会一起提交。
+- agent 在回合中提问时，回复选项序号即可（多选用逗号分隔，也可以直接回复文字）；DSH 指令仍然优先。
+- 等待超时后任务不会被丢弃：后台继续跟踪，完成后把结果补发到原聊天。
+- `dsh.chat on` 开启后，私聊里不带指令前缀的消息直接交给 DSH；配置项 `naturalLanguagePrivate` 打开时还要求最近有过交互。
 - `dsh.whoami` 不受白名单限制，被拒绝时可用它取到自己的标识。
 
 ## 配置
@@ -50,6 +56,8 @@ npm i koishi-plugin-dsh-connector
 | `historyLimit` | `5` | `dsh.history` 默认回放条数 |
 | `sessionLimit` | `20` | `dsh.sessions` 默认显示条数 |
 | `defaultWorkspace` | 空 | `dsh.new` 不带参数时使用的工作区 |
+| `naturalLanguagePrivate` | `false` | 私聊里不带前缀的消息直接交给 DSH |
+| `chatIdleMinutes` | `30` | 自然语言窗口：最近多少分钟内交互过才直通 |
 | `clientTimeZone` | `Asia/Shanghai` | 随任务提交的时区 |
 | `replyFormat` | `text` | `text` 转纯文本，`markdown` 保留原文 |
 | `splitLength` | `1500` | 超过该字数才分段，`0` 表示始终 |

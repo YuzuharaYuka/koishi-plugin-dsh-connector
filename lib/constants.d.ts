@@ -46,7 +46,10 @@ export declare const MESSAGES: {
     readonly noPendingApproval: "当前没有等待处理的授权请求。";
     readonly promptAccepted: "已提交到 DeepSeek Harness，正在执行……";
     readonly busy: "这个聊天还有任务在执行，等它结束或先发 dsh.stop。";
+    readonly steerAccepted: "已把补充指令加入当前任务。";
+    readonly questionExpired: "这条提问已过期，发 dsh.run 重新开始。";
     readonly promptTimedOut: "等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。";
+    readonly promptDeferred: "等待超时，任务仍在执行；完成后会把结果补发到这里。";
     readonly stopRequested: "已请求停止当前任务。";
     readonly sessionCreated: "已创建并绑定新的 DSH 会话。";
     readonly sessionMissing: "没有找到匹配的 DSH 会话，发 dsh.sessions 查看可用列表。";

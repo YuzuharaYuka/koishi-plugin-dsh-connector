@@ -10,7 +10,7 @@ import {
 } from '../core/auth'
 import { discoverDshPort } from '../core/discover'
 import { decodeAttachment, extractContent, fetchImage, type TurnImage } from '../core/media'
-import { EventBridge, type ApprovalRequest } from '../core/mux'
+import { EventBridge, type ApprovalRequest, type QuestionRequest } from '../core/mux'
 import { DshRpcError, callRpc, callRpcMultipart } from '../core/rpc'
 import { logger, normalizeTimeZone, sleep } from '../utils'
 import { diffUsage, EMPTY_USAGE, type TokenUsage } from '../core/pricing'
@@ -108,7 +108,10 @@ interface SequencedEvent {
 
 /** 等待超时时带上已经看到的最后一段回复，避免整段丢弃 */
 export class DshTurnTimeout extends Error {
-  constructor(readonly partial: string) {
+  constructor(
+    readonly partial: string,
+    readonly baseline = 0,
+  ) {
     super('等待 DSH 回复超时')
     this.name = 'DshTurnTimeout'
   }
@@ -189,6 +192,7 @@ export class DshClient {
   private bridge?: EventBridge
   private readonly pending: ApprovalRequest[] = []
   private approvalHandler?: (request: ApprovalRequest) => void
+  private questionHandler?: (request: QuestionRequest) => void
 
   constructor(private readonly config: Config) {}
 
@@ -294,6 +298,9 @@ export class DshClient {
         // 授权请求可能被 DSH 界面取消而永远收不到结论，限制队列长度避免无限增长
         if (this.pending.length > MAX_PENDING_APPROVALS) this.pending.shift()
         this.approvalHandler?.(request)
+      },
+      onQuestion: (request) => {
+        this.questionHandler?.(request)
       },
     })
     this.bridge.start()
@@ -683,8 +690,12 @@ export class DshClient {
     }
   }
 
-  async awaitTurn(sessionId: string, baseline: number): Promise<Omit<TurnResult, 'usage' | 'model'>> {
-    const deadline = Date.now() + this.config.promptTimeout * 1000
+  async awaitTurn(
+    sessionId: string,
+    baseline: number,
+    timeoutMs = this.config.promptTimeout * 1000,
+  ): Promise<Omit<TurnResult, 'usage' | 'model'>> {
+    const deadline = Date.now() + timeoutMs
     let lastSeen = ''
     let lastCursor = baseline
 
@@ -729,7 +740,7 @@ export class DshClient {
       await sleep(this.config.pollInterval)
     }
 
-    throw new DshTurnTimeout(lastSeen)
+    throw new DshTurnTimeout(lastSeen, baseline)
   }
 
   /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
@@ -773,6 +784,49 @@ export class DshClient {
 
   setApprovalHandler(handler: (request: ApprovalRequest) => void): void {
     this.approvalHandler = handler
+  }
+
+  setQuestionHandler(handler: (request: QuestionRequest) => void): void {
+    this.questionHandler = handler
+  }
+
+  /** 回答 agent 的提问；`callId` 用事件帧里的 eventId */
+  async answerQuestion(
+    sessionId: string,
+    callId: string,
+    answers: Array<{ id: string; selected: string[]; custom?: string }>,
+  ): Promise<void> {
+    await this.rpc('userQuestions/answer', {
+      agentId: sessionId,
+      callId,
+      answer: { answers },
+    })
+  }
+
+  /** 把补充指令注入正在运行的回合 */
+  async steer(sessionId: string, text: string): Promise<void> {
+    await this.rpc('session/prompt', {
+      request: {
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'steer',
+        content: [{ type: 'text', text }],
+        clientTimeZone: normalizeTimeZone(this.config.clientTimeZone),
+      },
+    })
+  }
+
+  /** 执行会话级斜杠命令（/compact、/permission 等） */
+  async runCommand(sessionId: string, line: string): Promise<{ kind: string; text: string }> {
+    const value = (await this.rpc('commands/execute', {
+      agentId: sessionId,
+      line,
+      submittedAttachments: [],
+    })) as { result?: { kind?: string; text?: string } }
+    return {
+      kind: String(value?.result?.kind ?? 'unknown'),
+      text: String(value?.result?.text ?? ''),
+    }
   }
 
   listPendingApprovals(sessionId?: string): ApprovalRequest[] {

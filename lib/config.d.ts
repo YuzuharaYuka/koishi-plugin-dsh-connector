@@ -15,6 +15,10 @@ export interface Config {
     defaultPermission: string;
     /** 新建会话使用的工作区；空串表示用 DSH 默认目录 */
     defaultWorkspace: string;
+    /** 私聊里不带指令前缀的消息直接交给 DSH */
+    naturalLanguagePrivate: boolean;
+    /** 自然语言模式的空闲窗口（分钟） */
+    chatIdleMinutes: number;
     mergeForward: boolean;
     splitLength: number;
     chunkLength: number;

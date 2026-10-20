@@ -17,6 +17,10 @@ export interface Config {
   defaultPermission: string
   /** 新建会话使用的工作区；空串表示用 DSH 默认目录 */
   defaultWorkspace: string
+  /** 私聊里不带指令前缀的消息直接交给 DSH */
+  naturalLanguagePrivate: boolean
+  /** 自然语言模式的空闲窗口（分钟） */
+  chatIdleMinutes: number
   mergeForward: boolean
   splitLength: number
   chunkLength: number
@@ -80,6 +84,14 @@ export const Config: Schema<Config> = Schema.intersect([
     defaultWorkspace: Schema.string()
       .default('')
       .description('**默认工作区**<br>`dsh.new` 不带参数时使用；留空则用 DSH 默认目录'),
+    naturalLanguagePrivate: Schema.boolean()
+      .default(false)
+      .description('**私聊自然语言**<br>私聊里不带指令前缀的消息直接交给 DSH；也可用 `dsh.chat on` 按聊天开启'),
+    chatIdleMinutes: Schema.natural()
+      .min(0)
+      .max(1440)
+      .default(30)
+      .description('**自然语言窗口**<br>配置开启时，最近多少分钟内交互过才直通；`0` 表示只认手动开启'),
     clientTimeZone: Schema.string()
       .default('Asia/Shanghai')
       .description('**客户端时区**<br>IANA 名称，如 `Asia/Shanghai`'),
@@ -185,6 +197,8 @@ export function normalizeConfig(config: Config): Config {
     historyLimit: Math.max(1, Math.min(50, config.historyLimit ?? 5)),
     sessionLimit: Math.max(1, Math.min(200, config.sessionLimit ?? 20)),
     defaultWorkspace: (config.defaultWorkspace ?? '').trim(),
+    naturalLanguagePrivate: config.naturalLanguagePrivate ?? false,
+    chatIdleMinutes: Math.max(0, Math.min(1440, config.chatIdleMinutes ?? 30)),
     clientTimeZone: (config.clientTimeZone ?? '').trim() || 'Asia/Shanghai',
     replyFormat: config.replyFormat === 'markdown' ? 'markdown' : 'text',
     allowUsers: (config.allowUsers ?? []).map((id) => String(id).trim()).filter(Boolean),

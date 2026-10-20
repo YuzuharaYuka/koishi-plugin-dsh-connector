@@ -8,13 +8,39 @@ export interface ApprovalRequest {
     reason?: string;
     raw: WaterfallFrame;
 }
+export interface QuestionOption {
+    label: string;
+    description?: string;
+}
+export interface QuestionItem {
+    id: string;
+    question: string;
+    header?: string;
+    options: QuestionOption[];
+    multiSelect?: boolean;
+}
+/** DSH 的 `user-questions/request`：agent 在回合中主动向用户提问 */
+export interface QuestionRequest {
+    eventId: string;
+    sessionId: string;
+    questions: QuestionItem[];
+    raw: WaterfallFrame;
+}
 export interface EventBridgeOptions {
     wsUrl: string;
     baseUrl: string;
     getCookie: () => Promise<string>;
     onApproval: (request: ApprovalRequest) => void;
+    onQuestion?: (request: QuestionRequest) => void;
     debug: boolean;
 }
+/**
+ * 把一帧 waterfall 识别成提问请求。
+ *
+ * 实测帧形如：
+ * `{ type: 'waterfall', event: 'user-questions/request', eventId, agentId, request: { questions: [...] } }`
+ */
+export declare function readQuestionFrame(frame: WaterfallFrame): QuestionRequest | null;
 /**
  * 把一帧 waterfall 识别成授权请求。
  *

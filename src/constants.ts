@@ -75,7 +75,10 @@ export const MESSAGES = {
 
   promptAccepted: '已提交到 DeepSeek Harness，正在执行……',
   busy: '这个聊天还有任务在执行，等它结束或先发 dsh.stop。',
+  steerAccepted: '已把补充指令加入当前任务。',
+  questionExpired: '这条提问已过期，发 dsh.run 重新开始。',
   promptTimedOut: '等待超时，任务可能仍在 DSH 中执行。稍后可用 dsh.history 查看结果。',
+  promptDeferred: '等待超时，任务仍在执行；完成后会把结果补发到这里。',
 
   stopRequested: '已请求停止当前任务。',
 

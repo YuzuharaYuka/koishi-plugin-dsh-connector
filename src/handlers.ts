@@ -8,6 +8,7 @@ import { FORWARD_PLATFORMS, MESSAGES, effortLabel, presetLabel } from './constan
 import { toPlainText, stripChatMarkup } from './core/markdown'
 import { loadFileSource, loadImageSource, sanitizeFileName, type TurnImage } from './core/media'
 import { estimateCost, formatCost, formatNumber, totalTokens } from './core/pricing'
+import type { QuestionItem } from './core/mux'
 import { splitText } from './core/text'
 import {
   DshTurnTimeout,
@@ -28,10 +29,22 @@ const INCOMING_IMAGE_TIMEOUT_MS = 15000
 const MAX_INCOMING_FILES = 5
 /** 发送用的临时文件保留时长 */
 const TEMP_FILE_TTL_MS = 3600_000
+/** 提问等待回答的时长 */
+const QUESTION_TTL_MS = 10 * 60 * 1000
+/** 超时补发最多再等多久 */
+const DEFERRED_TIMEOUT_MS = 30 * 60 * 1000
 
 interface ChatElement {
   type?: string
   attrs?: Record<string, unknown>
+}
+
+/** 等待用户回答的提问 */
+export interface PendingQuestion {
+  sessionId: string
+  callId: string
+  questions: QuestionItem[]
+  at: number
 }
 
 export interface HandlerDeps {
@@ -43,6 +56,14 @@ export interface HandlerDeps {
   listings: Map<string, DshSessionSummary[]>
   /** 正在执行任务的聊天：同一聊天不允许并发跑两轮 */
   running: Set<string>
+  /** 等待回答的提问，按聊天隔离 */
+  questions: Map<string, PendingQuestion>
+  /** 已安排超时补发的聊天 */
+  deferred: Set<string>
+  /** 自然语言模式的按聊天覆盖（on/off） */
+  chatMode: Map<string, boolean>
+  /** 最近一次与插件交互的时间，用于自然语言窗口 */
+  lastActive: Map<string, number>
 }
 
 /** 聊天窗口在绑定表中的键；私聊时 channelId 可能缺失 */
@@ -526,7 +547,9 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
     } catch (error) {
       if (error instanceof DshTurnTimeout) {
         const partial = renderReply(deps.config, error.partial)
-        return partial ? `${partial}\n\n${MESSAGES.promptTimedOut}` : MESSAGES.promptTimedOut
+        // 任务还在跑：后台继续等待，完成时补发到这个聊天
+        scheduleDeferredDelivery(deps, session, binding.sessionId, error.baseline)
+        return partial ? `${partial}\n\n${MESSAGES.promptDeferred}` : MESSAGES.promptDeferred
       }
       throw error
     }
@@ -743,4 +766,212 @@ export async function handleApproval(
   const answered = await deps.client.answerApproval(decision, binding?.sessionId)
   if (!answered) return MESSAGES.noPendingApproval
   return decision === 'allow' ? MESSAGES.approveSent : MESSAGES.denySent
+}
+
+/** 把提问渲染成聊天里能直接回答的形式 */
+export function renderQuestions(questions: QuestionItem[]): string {
+  const lines: string[] = []
+  if (questions.length === 1) {
+    const item = questions[0]
+    lines.push(item.header ? `需要你确认：${item.header}` : '需要你确认')
+    lines.push(item.question)
+    item.options.forEach((option, index) => {
+      lines.push(`${index + 1}. ${option.label}${option.description ? ` —— ${option.description}` : ''}`)
+    })
+    lines.push(
+      item.multiSelect
+        ? '回复序号（多选用逗号分隔），也可以直接回复文字。'
+        : '回复序号，也可以直接回复文字。',
+    )
+    return lines.join('\n')
+  }
+
+  lines.push(`需要你确认 ${questions.length} 个问题`)
+  questions.forEach((item, index) => {
+    lines.push(`${index + 1}. ${item.question}`)
+    item.options.forEach((option, optionIndex) => lines.push(`   ${optionIndex + 1}) ${option.label}`))
+  })
+  lines.push('按顺序回复序号，用逗号分隔，例如 1,2。')
+  return lines.join('\n')
+}
+
+const NUMBER_RE = /^\d+$/
+
+/** 解析用户回答；多选题按序号返回 label，其它文字当作自定义回答 */
+export function parseQuestionAnswer(
+  questions: QuestionItem[],
+  text: string,
+): { answers: Array<{ id: string; selected: string[]; custom?: string }> } | { error: string } {
+  const value = text.trim()
+  if (!value) return { error: '请回复选项序号或文字。' }
+
+  if (questions.length === 1) {
+    const question = questions[0]
+    const tokens = value.split(/[,，、\s]+/).filter(Boolean)
+    if (tokens.length > 0 && tokens.every((token) => NUMBER_RE.test(token)) && question.options.length > 0) {
+      const selected: string[] = []
+      for (const token of tokens) {
+        const option = question.options[Number(token) - 1]
+        if (!option) return { error: `选项 ${token} 不存在。` }
+        selected.push(option.label)
+      }
+      return { answers: [{ id: question.id, selected }] }
+    }
+    return { answers: [{ id: question.id, selected: [], custom: value }] }
+  }
+
+  const tokens = value
+    .split(/[,，、]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+  if (tokens.length !== questions.length) {
+    return { error: `共 ${questions.length} 个问题，请按顺序回复 ${questions.length} 个序号，用逗号分隔。` }
+  }
+
+  const answers: Array<{ id: string; selected: string[] }> = []
+  for (let index = 0; index < questions.length; index += 1) {
+    const question = questions[index]
+    const token = tokens[index]
+    if (!NUMBER_RE.test(token)) return { error: `第 ${index + 1} 个问题需要回复序号。` }
+    const option = question.options[Number(token) - 1]
+    if (!option) return { error: `第 ${index + 1} 个问题没有选项 ${token}。` }
+    answers.push({ id: question.id, selected: [option.label] })
+  }
+  return { answers }
+}
+
+/** 有提问待回答时消费这条消息；未消费返回 undefined */
+export async function answerPendingQuestion(
+  deps: HandlerDeps,
+  session: Session,
+  text: string,
+): Promise<string | undefined> {
+  const key = sessionKey(session)
+  const pending = deps.questions.get(key)
+  if (!pending) return undefined
+  if (Date.now() - pending.at > QUESTION_TTL_MS) {
+    deps.questions.delete(key)
+    return MESSAGES.questionExpired
+  }
+  if (checkAccess(deps.config, session) !== null) return undefined
+
+  const parsed = parseQuestionAnswer(pending.questions, text)
+  if ('error' in parsed) return parsed.error
+
+  try {
+    await deps.client.answerQuestion(pending.sessionId, pending.callId, parsed.answers)
+  } catch (error) {
+    return `提交回答失败：${getErrorMessage(error)}`
+  }
+  deps.questions.delete(key)
+
+  const labels = parsed.answers.flatMap((item) =>
+    item.selected.length > 0 ? item.selected : [item.custom ?? ''],
+  )
+  return labels.length > 0 ? `已提交选择：${labels.join('、')}` : '已提交回答。'
+}
+
+/** 把补充指令注入正在运行的任务；没有在跑就按普通任务处理 */
+export async function handleSteer(deps: HandlerDeps, session: Session, text: string): Promise<h.Fragment> {
+  const binding = bindingOf(deps, session)
+  if (!binding) return MESSAGES.noBinding
+  const input = stripChatMarkup(text)
+  if (!input) return MESSAGES.emptyUsage
+  if (!deps.running.has(sessionKey(session))) return handleRun(deps, session, input)
+
+  await deps.client.steer(binding.sessionId, input)
+  return MESSAGES.steerAccepted
+}
+
+/** /compact 与 /clear：交给 DSH 自己的命令处理 */
+export async function handleContextCommand(
+  deps: HandlerDeps,
+  session: Session,
+  kind: 'compact' | 'clear',
+): Promise<string> {
+  const binding = bindingOf(deps, session)
+  if (!binding) return MESSAGES.noBinding
+  const result = await deps.client.runCommand(binding.sessionId, `/${kind}`)
+  if (result.text) return result.text
+  if (result.kind === 'success') return kind === 'compact' ? '已压缩上下文。' : '已清空上下文。'
+  return 'DSH 没有返回结果。'
+}
+
+/** 记录一次交互，自然语言窗口据此续期 */
+export function touchSession(deps: HandlerDeps, session: Session): void {
+  deps.lastActive.set(sessionKey(session), Date.now())
+}
+
+/** 私聊里是否该把这句普通消息直接当作指令 */
+export function shouldRunNaturalLanguage(deps: HandlerDeps, session: Session): boolean {
+  if (!session.isDirect) return false
+  if (checkAccess(deps.config, session) !== null) return false
+
+  const key = sessionKey(session)
+  const override = deps.chatMode.get(key)
+  const enabled = override ?? deps.config.naturalLanguagePrivate
+  if (!enabled) return false
+  // 手动开启不看窗口，配置开启则要求最近有过交互
+  if (override === true) return true
+  const last = deps.lastActive.get(key) ?? 0
+  return Date.now() - last <= deps.config.chatIdleMinutes * 60_000
+}
+
+export function handleChatMode(deps: HandlerDeps, session: Session, action?: string): string {
+  const key = sessionKey(session)
+  const value = (action ?? '').trim().toLowerCase()
+  const override = deps.chatMode.get(key)
+  const configured = deps.config.naturalLanguagePrivate
+
+  if (!value) {
+    const enabled = override ?? configured
+    const last = deps.lastActive.get(key) ?? 0
+    const lines = [
+      `自然语言模式：${enabled ? '开启' : '关闭'}${override === undefined ? '（跟随配置）' : '（手动设置）'}`,
+    ]
+    if (enabled) {
+      lines.push(
+        override === true
+          ? '手动开启不受空闲限制，发 dsh.chat off 关闭。'
+          : `最近 ${deps.config.chatIdleMinutes} 分钟内交互过才会直通，超时自动失效。`,
+      )
+    }
+    if (last > 0) lines.push(`最近一次交互：${Math.round((Date.now() - last) / 60000)} 分钟前`)
+    lines.push('用 dsh.chat on 或 dsh.chat off 调整。')
+    return lines.join('\n')
+  }
+
+  if (value === 'on' || value === '开启') {
+    deps.chatMode.set(key, true)
+    return '已开启自然语言模式：私聊里不带指令前缀的消息会直接发给 DSH。'
+  }
+  if (value === 'off' || value === '关闭') {
+    deps.chatMode.set(key, false)
+    return '已关闭自然语言模式。'
+  }
+  return '用法：dsh.chat on / off'
+}
+
+/** 超时后继续跟踪任务，完成时补发到原聊天 */
+function scheduleDeferredDelivery(
+  deps: HandlerDeps,
+  session: Session,
+  sessionId: string,
+  baseline: number,
+): void {
+  const key = sessionKey(session)
+  if (deps.deferred.has(key)) return
+  deps.deferred.add(key)
+
+  void (async () => {
+    try {
+      const result = await deps.client.awaitTurn(sessionId, baseline, DEFERRED_TIMEOUT_MS)
+      const output = renderReply(deps.config, result.text)
+      if (output) await session.send(output)
+    } catch (error) {
+      logger.debug(`[defer] 补发失败: ${getErrorMessage(error)}`)
+    } finally {
+      deps.deferred.delete(key)
+    }
+  })()
 }

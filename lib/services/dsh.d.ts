@@ -1,6 +1,6 @@
 import type { Config } from '../config';
 import { type TurnImage } from '../core/media';
-import { type ApprovalRequest } from '../core/mux';
+import { type ApprovalRequest, type QuestionRequest } from '../core/mux';
 import { type TokenUsage } from '../core/pricing';
 export type ApprovalDecision = 'allow' | 'deny';
 export interface DshSessionSummary {
@@ -77,7 +77,8 @@ export interface TurnResult {
 /** 等待超时时带上已经看到的最后一段回复，避免整段丢弃 */
 export declare class DshTurnTimeout extends Error {
     readonly partial: string;
-    constructor(partial: string);
+    readonly baseline: number;
+    constructor(partial: string, baseline?: number);
 }
 /** 从 `assistant/message` 事件里取出文本块 */
 export declare function extractEventText(event: unknown): string;
@@ -97,6 +98,7 @@ export declare class DshClient {
     private bridge?;
     private readonly pending;
     private approvalHandler?;
+    private questionHandler?;
     constructor(config: Config);
     get relayMode(): boolean;
     get connected(): boolean;
@@ -169,11 +171,25 @@ export declare class DshClient {
     tokenUsage(sessionId: string): Promise<TokenUsage>;
     /** 账户余额；未登录平台账号时返回 undefined */
     accountBalance(): Promise<BalanceInfo | undefined>;
-    awaitTurn(sessionId: string, baseline: number): Promise<Omit<TurnResult, 'usage' | 'model'>>;
+    awaitTurn(sessionId: string, baseline: number, timeoutMs?: number): Promise<Omit<TurnResult, 'usage' | 'model'>>;
     /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
     private resolveImages;
     private readAttachment;
     setApprovalHandler(handler: (request: ApprovalRequest) => void): void;
+    setQuestionHandler(handler: (request: QuestionRequest) => void): void;
+    /** 回答 agent 的提问；`callId` 用事件帧里的 eventId */
+    answerQuestion(sessionId: string, callId: string, answers: Array<{
+        id: string;
+        selected: string[];
+        custom?: string;
+    }>): Promise<void>;
+    /** 把补充指令注入正在运行的回合 */
+    steer(sessionId: string, text: string): Promise<void>;
+    /** 执行会话级斜杠命令（/compact、/permission 等） */
+    runCommand(sessionId: string, line: string): Promise<{
+        kind: string;
+        text: string;
+    }>;
     listPendingApprovals(sessionId?: string): ApprovalRequest[];
     answerApproval(decision: ApprovalDecision, sessionId?: string): Promise<ApprovalRequest | undefined>;
     dispose(): void;

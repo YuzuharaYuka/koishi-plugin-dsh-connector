@@ -14,11 +14,33 @@ export interface ApprovalRequest {
   raw: WaterfallFrame
 }
 
+export interface QuestionOption {
+  label: string
+  description?: string
+}
+
+export interface QuestionItem {
+  id: string
+  question: string
+  header?: string
+  options: QuestionOption[]
+  multiSelect?: boolean
+}
+
+/** DSH 的 `user-questions/request`：agent 在回合中主动向用户提问 */
+export interface QuestionRequest {
+  eventId: string
+  sessionId: string
+  questions: QuestionItem[]
+  raw: WaterfallFrame
+}
+
 export interface EventBridgeOptions {
   wsUrl: string
   baseUrl: string
   getCookie: () => Promise<string>
   onApproval: (request: ApprovalRequest) => void
+  onQuestion?: (request: QuestionRequest) => void
   debug: boolean
 }
 
@@ -40,6 +62,56 @@ function pickRecord(source: Record<string, unknown>, keys: string[]): Record<str
     if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
   }
   return {}
+}
+
+/**
+ * 把一帧 waterfall 识别成提问请求。
+ *
+ * 实测帧形如：
+ * `{ type: 'waterfall', event: 'user-questions/request', eventId, agentId, request: { questions: [...] } }`
+ */
+export function readQuestionFrame(frame: WaterfallFrame): QuestionRequest | null {
+  const label = ['endpoint', 'method', 'name', 'event', 'type']
+    .map((key) => frame[key])
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+  if (!label.includes('question')) return null
+
+  const eventId = pickString(frame, ['eventId', 'id'])
+  const sessionId = pickString(frame, ['agentId', 'sessionId'])
+  const request = pickRecord(frame, ['request', 'args', 'payload', 'data'])
+  const rawQuestions = request.questions
+  if (!eventId || !sessionId || !Array.isArray(rawQuestions)) return null
+
+  const questions: QuestionItem[] = []
+  for (const item of rawQuestions) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const id = pickString(record, ['id'])
+    const question = pickString(record, ['question', 'text', 'title'])
+    if (!id || !question) continue
+    const options: QuestionOption[] = []
+    for (const option of Array.isArray(record.options) ? record.options : []) {
+      if (!option || typeof option !== 'object') continue
+      const data = option as Record<string, unknown>
+      const label = pickString(data, ['label', 'value', 'text'])
+      if (!label) continue
+      options.push({
+        label,
+        description: pickString(data, ['description', 'detail']),
+      })
+    }
+    questions.push({
+      id,
+      question,
+      header: pickString(record, ['header', 'title']),
+      options,
+      multiSelect: record.multiSelect === true,
+    })
+  }
+
+  if (questions.length === 0) return null
+  return { eventId, sessionId, questions, raw: frame }
 }
 
 /**
@@ -191,6 +263,12 @@ export class EventBridge {
     if (payload.type === 'ready') {
       const clientId = typeof payload.clientId === 'string' ? payload.clientId : ''
       this.readyClientId = clientId || undefined
+      return
+    }
+
+    const question = readQuestionFrame(payload)
+    if (question) {
+      this.options.onQuestion?.(question)
       return
     }
 

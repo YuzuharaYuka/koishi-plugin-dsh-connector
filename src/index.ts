@@ -3,8 +3,17 @@ import { join } from 'node:path'
 import { type Config, normalizeConfig } from './config'
 import { registerCommands } from './commands'
 import { MESSAGES, PLUGIN_NAME } from './constants'
+import { stripChatMarkup } from './core/markdown'
+import {
+  answerPendingQuestion,
+  handleRun,
+  renderQuestions,
+  shouldRunNaturalLanguage,
+  touchSession,
+  type PendingQuestion,
+} from './handlers'
 import { DshClient, type DshSessionSummary } from './services/dsh'
-import { BindingStore } from './services/store'
+import { BindingStore, bindingKey } from './services/store'
 import { getErrorMessage, logger } from './utils'
 
 export * from './config'
@@ -21,6 +30,9 @@ export const usage = `
 | \`dsh.workspaces\` | \`dsh工作区\` | 列出已知工作区 |
 | \`dsh.use 序号\` | \`dsh切换\` | 按序号或 ID 绑定 |
 | \`dsh.run 内容\` | \`dsh运行\` | 交给 DSH 执行 |
+| \`dsh.steer 内容\` | \`dsh插话\` | 往运行中的任务补充指令 |
+| \`dsh.compact\` / \`dsh.clear\` | \`dsh压缩\` / \`dsh清空\` | 压缩或清空上下文 |
+| \`dsh.chat on/off\` | \`dsh对话\` | 私聊自然语言模式 |
 | \`dsh.stop\` | \`dsh停止\` | 停止当前任务 |
 | \`dsh.history [条数]\` | \`dsh历史\` | 回放最近回复 |
 | \`dsh.model [序号] [等级]\` | \`dsh模型\` | 查看或切换模型与思考等级 |
@@ -44,6 +56,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const listings = new Map<string, DshSessionSummary[]>()
   // 正在执行任务的聊天，避免同一聊天并发跑两轮
   const running = new Set<string>()
+  // 等待回答的提问、已安排补发的聊天、自然语言覆盖与最近交互时间
+  const questions = new Map<string, PendingQuestion>()
+  const deferred = new Set<string>()
+  const chatMode = new Map<string, boolean>()
+  const lastActive = new Map<string, number>()
 
   ctx.on('ready', async () => {
     await store.load()
@@ -87,7 +104,50 @@ export function apply(ctx: Context, rawConfig: Config): void {
     })
   })
 
-  const deps = { ctx, config, client, store, listings, running }
+  const deps = { ctx, config, client, store, listings, running, questions, deferred, chatMode, lastActive }
+
+  // 提问：agent 在回合中主动向用户要选择，推回绑定过的聊天等待回答
+  client.setQuestionHandler((request) => {
+    const binding = store.findBySession(request.sessionId)
+    if (!binding) {
+      logger.debug('[question] 没有对应的聊天绑定，跳过推送')
+      return
+    }
+    const key = bindingKey(binding.platform, binding.selfId, binding.channelId)
+    questions.set(key, {
+      sessionId: request.sessionId,
+      callId: request.eventId,
+      questions: request.questions,
+      at: Date.now(),
+    })
+
+    const bot = ctx.bots.find((item) => item.platform === binding.platform && item.selfId === binding.selfId)
+    if (!bot) {
+      logger.warn('[question] 找不到对应的机器人实例，无法推送提问。')
+      return
+    }
+    bot.sendMessage(binding.channelId, renderQuestions(request.questions)).catch((error: unknown) => {
+      logger.warn(`[question] 推送提问失败: ${getErrorMessage(error)}`)
+    })
+  })
+
+  // 有待回答的提问时，先把它消费掉；这类消息不会再被当成新任务
+  ctx.middleware(async (session, next) => {
+    const text = stripChatMarkup(session.content ?? '')
+    if (!text) return next()
+    const answered = await answerPendingQuestion(deps, session, text)
+    if (answered !== undefined) return answered
+    return next()
+  })
+
+  // 私聊自然语言：只处理没有匹配任何指令的消息
+  ctx.middleware((session, next) => {
+    if (!shouldRunNaturalLanguage(deps, session)) return next()
+    const text = stripChatMarkup(session.content ?? '')
+    if (!text) return next()
+    touchSession(deps, session)
+    return handleRun(deps, session, text)
+  })
 
   registerCommands(deps, config)
 
@@ -96,5 +156,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     store.dispose()
     listings.clear()
     running.clear()
+    questions.clear()
+    deferred.clear()
+    chatMode.clear()
+    lastActive.clear()
   })
 }

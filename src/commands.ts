@@ -4,6 +4,8 @@ import {
   checkAccess,
   handleApproval,
   handleBalance,
+  handleChatMode,
+  handleContextCommand,
   handleGet,
   handleHistory,
   handleModel,
@@ -12,12 +14,14 @@ import {
   handlePermission,
   handleRun,
   handleSessions,
+  handleSteer,
   handleStop,
   handleThink,
   handleUse,
   handleWhoami,
   handleWorkspaces,
   renderReply,
+  touchSession,
   type HandlerDeps,
 } from './handlers'
 import { getErrorMessage, logger } from './utils'
@@ -30,6 +34,9 @@ const HELP_TEXT = [
   '· dsh.workspaces：列出已知工作区',
   '· dsh.use 序号：按序号或 ID 绑定',
   '· dsh.run 内容：交给 DSH 执行',
+  '· dsh.steer 内容：往运行中的任务补充指令',
+  '· dsh.compact / dsh.clear：压缩或清空上下文',
+  '· dsh.chat on/off：私聊自然语言模式',
   '· dsh.stop：停止当前任务',
   '· dsh.history [条数]：回放最近回复',
   '· dsh.model [序号] [等级]：查看或切换模型',
@@ -71,7 +78,10 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     return deps.store
       .load()
       .then(() => run(session))
-      .then((result) => (typeof result === 'string' ? renderReply(config, result) : result))
+      .then((result) => {
+        touchSession(deps, session)
+        return typeof result === 'string' ? renderReply(config, result) : result
+      })
       .catch((error: unknown) => {
         const message = getErrorMessage(error)
         logger.warn(`[command] 指令执行失败: ${message}`)
@@ -131,6 +141,35 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     .example('dsh.think')
     .example('dsh.think high')
     .action(({ session }, effort) => action(session, (session) => handleThink(deps, session, effort ?? undefined)))
+
+  ctx.command('dsh.steer <text:text>', '给运行中的任务补充指令')
+    .alias('dsh插话')
+    .usage('任务正在执行时把内容注入当前回合；没有任务在跑就按普通 dsh.run 处理。')
+    .example('dsh.steer 顺便把测试也跑一下')
+    .action(({ session }, text) => action(session, (session) => handleSteer(deps, session, text ?? '')))
+
+  ctx.command('dsh.compact', '压缩当前会话的上下文')
+    .alias('dsh压缩')
+    .usage('调用 DSH 自带的 /compact，较早的历史会被摘要，会话与绑定不变。')
+    .action(({ session }) => action(session, (session) => handleContextCommand(deps, session, 'compact')))
+
+  ctx.command('dsh.clear', '清空当前会话的上下文')
+    .alias('dsh清空')
+    .usage('调用 DSH 自带的 /clear，保留会话绑定与历史记录，只清空模型上下文。')
+    .action(({ session }) => action(session, (session) => handleContextCommand(deps, session, 'clear')))
+
+  ctx.command('dsh.chat [action:string]', '私聊自然语言模式')
+    .alias('dsh对话')
+    .usage(
+      '不带参数查看状态。\n' +
+      '开启后私聊里不带指令前缀的消息会直接交给 DSH；dsh.* 指令仍然优先。',
+    )
+    .example('dsh.chat')
+    .example('dsh.chat on')
+    .example('dsh.chat off')
+    .action(({ session }, value) =>
+      action(session, (session) => Promise.resolve(handleChatMode(deps, session, value))),
+    )
 
   ctx.command('dsh.get <path:string>', '取回工作区里的文件')
     .alias('dsh取文件')
