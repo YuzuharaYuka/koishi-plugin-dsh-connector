@@ -49,21 +49,26 @@ export interface WorkspaceSnapshot {
   pinned: string[]
 }
 
+/** 工作区流的增量：归档/置顶都是整表替换 */
+export type WorkspaceUpdate =
+  | { kind: 'baseline'; snapshot: WorkspaceSnapshot }
+  | { kind: 'archived'; archived: string[] }
+  | { kind: 'pinned'; pinned: string[] }
+
 export interface EventBridgeOptions {
   wsUrl: string
   baseUrl: string
   getCookie: () => Promise<string>
   onApproval: (request: ApprovalRequest) => void
   onQuestion?: (request: QuestionRequest) => void
-  onWorkspace?: (snapshot: WorkspaceSnapshot) => void
+  onWorkspace?: (update: WorkspaceUpdate) => void
   debug: boolean
 }
 
 const EVENTS_STREAM = 'koishi-plugin-dsh'
 const WORKSPACE_STREAM = 'koishi-plugin-dsh-workspace'
 
-function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapshot | null {
-  const payload = (value.value ?? value) as Record<string, unknown>
+function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapshot | null {  const payload = (value.value ?? value) as Record<string, unknown>
   const items = payload.items
   if (!Array.isArray(items)) return null
 
@@ -317,12 +322,19 @@ export class EventBridge {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return
     const payload = value as WaterfallFrame
 
-    // 工作区流：基线（以及后续整包替换）直接覆盖本地快照
+    // 工作区流：基线/整包替换覆盖快照，归档与置顶是整表替换
     if (frame.streamId === WORKSPACE_STREAM) {
       const type = payload.type
+      const toIds = (input: unknown): string[] =>
+        (Array.isArray(input) ? input : []).filter((id): id is string => typeof id === 'string')
+
       if (type === 'baseline' || type === 'replace') {
         const snapshot = readWorkspaceSnapshot(payload)
-        if (snapshot) this.options.onWorkspace?.(snapshot)
+        if (snapshot) this.options.onWorkspace?.({ kind: 'baseline', snapshot })
+      } else if (type === 'archived') {
+        this.options.onWorkspace?.({ kind: 'archived', archived: toIds(payload.archivedSessionIds) })
+      } else if (type === 'pinned') {
+        this.options.onWorkspace?.({ kind: 'pinned', pinned: toIds(payload.pinnedSessionIds) })
       } else if (this.options.debug) {
         logger.debug(`[mux] 未处理的工作区帧: ${text.slice(0, 300)}`)
       }

@@ -6,7 +6,9 @@
 npm i koishi-plugin-dsh-connector
 ```
 
-需要 Koishi 4.18 及以上，且 DSH 网页服务正在运行；Koishi 与 DSH 应以同一系统用户运行，否则配置 `dshHome`。
+需要 Koishi 4.18 及以上，且 DSH 网页服务正在运行；两者建议以同一系统用户运行，否则配置 `dshHome`。
+
+[指令](#指令) · [配置](#配置) · [说明](#说明) · [License](#license)
 
 ## 指令
 
@@ -14,72 +16,100 @@ npm i koishi-plugin-dsh-connector
 | :--- | :--- |
 | `dsh.ping` | 连接状态、工作区、模型、权限与任务状态 |
 | `dsh.sessions` | 会话列表，按 DSH 工作区分组，`-a` 显示全部 |
+| `dsh.use 序号` | 按序号或会话 ID 绑定 |
 | `dsh.new [目录/序号]` | 新建并绑定会话，可指定工作区 |
 | `dsh.workspaces` | 列出已知工作区 |
-| `dsh.use 序号` | 按序号或会话 ID 绑定 |
+| `dsh.archive [序号]` / `dsh.unarchive [序号]` | 归档或恢复会话，省略参数时操作当前绑定 |
 | `dsh.run 内容` | 下发任务并等待结果 |
 | `dsh.steer 内容` | 往运行中的任务补充指令 |
-| `dsh.compact` / `dsh.clear` | 压缩或清空上下文 |
-| `dsh.chat on/off` | 私聊自然语言模式 |
 | `dsh.stop` | 停止当前任务 |
 | `dsh.history [条数]` | 回放最近的回复 |
+| `dsh.compact` / `dsh.clear` | 压缩或清空上下文 |
 | `dsh.model [序号] [等级]` | 查看或切换模型与思考等级 |
 | `dsh.think [等级]` | 只调整思考等级 |
 | `dsh.get 路径` | 取回工作区里的文件 |
+| `dsh.chat on/off` | 私聊自然语言模式 |
 | `dsh.balance` | 查看账户余额 |
 | `dsh.permission [预设]` | 查看或切换权限预设 |
 | `dsh.approve` / `dsh.deny` | 处理授权请求 |
 | `dsh.whoami` | 查看自己的用户标识 |
 
-- 每个聊天独立绑定会话，未绑定时 `dsh.run` 会自动新建。
-- `dsh.sessions` 默认列最近 20 个，按修改时间倒序；`-a` 列出全部。
-- 会话的分组、排序、筛选与 DSH 界面一致：组名是 DSH 里的工作区名，归档状态取自工作区基线；不在任何工作区的会话归入「未分组」。
-- `dsh.new` 不带参数时使用配置项 `defaultWorkspace`，也可给序号或绝对路径。
-- 思考等级为 `off` / `low` / `high` / `max`，切换模型时未指定等级会沿用当前值。
-- `dsh.run` 会提交消息附带的图片和文件，回复里的图片也会回传；长回复自动分段或合并转发。
-- `dsh.balance` 读取 DSH 登录的 DeepSeek 平台账户余额。DSH 没有花费接口，`showCost` 是按官方价目表（区分缓存命中与高峰时段）对 token 的估算，仅供参考。
-- QQ 无法把文字和文件放在同一条消息里：引用一条带附件的消息再发 `dsh.run`，该附件会一起提交。
-- agent 在回合中提问时，回复选项序号即可（多选用逗号分隔，也可以直接回复文字）；DSH 指令仍然优先。同一个问题也会出现在 Web 界面，任一边回答都有效，聊天的待答状态在回合结束或 5 分钟后失效。
-- 等待超时后任务不会被丢弃：后台继续跟踪，完成后把结果补发到原聊天。
-- `dsh.chat on` 开启后，私聊里不带指令前缀的消息直接交给 DSH；配置项 `naturalLanguagePrivate` 打开时还要求最近有过交互。
-- `dsh.whoami` 不受白名单限制，被拒绝时可用它取到自己的标识。
-
 ## 配置
+
+### 连接
 
 | 配置项 | 默认值 | 说明 |
 | :--- | :--- | :--- |
 | `mode` | `auto` | `auto` / `direct` / `relay` |
 | `baseUrl` | 空 | DSH 地址，留空自动发现端口 |
-| `dshHome` | 空 | DSH 主目录，留空取 `DSH_HOME` 或 `~/.dsh` |
-| `accessKey` | 空 | relay 访问密钥，仅跨机访问时填写 |
-| `pollInterval` | `1200` | 结果轮询间隔（毫秒） |
-| `promptTimeout` | `600` | 单轮任务等待上限（秒） |
-| `historyLimit` | `5` | `dsh.history` 默认回放条数 |
-| `sessionLimit` | `20` | `dsh.sessions` 默认显示条数 |
-| `sessionGroupBy` | `workspace` | 分组方式：`workspace` 按工作区 / `flat` 单列表 |
-| `sessionSortBy` | `updated` | 排序方式：`updated` 最近更新 / `manual` 手动排序 |
-| `sessionFilter` | `active` | 筛选方式：`active` 隐藏已归档 / `all` 全部 / `archived` 仅已归档 |
+| `dshHome` | 空 | DSH 主目录，留空取环境变量或 `~/.dsh` |
+| `accessKey` | 空 | relay 访问密钥，仅跨机时填写 |
+
+### 会话
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
 | `defaultWorkspace` | 空 | `dsh.new` 不带参数时使用的工作区 |
-| `naturalLanguagePrivate` | `false` | 私聊里不带前缀的消息直接交给 DSH |
-| `chatIdleMinutes` | `30` | 自然语言窗口：最近多少分钟内交互过才直通 |
-| `clientTimeZone` | `Asia/Shanghai` | 随任务提交的时区 |
-| `replyFormat` | `text` | `text` 转纯文本，`markdown` 保留原文 |
+| `sessionLimit` | `20` | `dsh.sessions` 默认显示条数 |
+| `sessionGroupBy` | `workspace` | `workspace` 按工作区 / `flat` 单列表 |
+| `sessionSortBy` | `updated` | `updated` 最近更新 / `manual` 手动排序 |
+| `sessionFilter` | `active` | `active` 隐藏已归档 / `all` 全部 / `archived` 仅已归档 |
+
+### 回复
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `replyFormat` | `text` | `text` 转纯文本 / `markdown` 保留原文 |
 | `splitLength` | `1500` | 超过该字数才分段，`0` 表示始终 |
-| `chunkLength` | `1500` | 分段每段、合并转发每个节点的最大字数 |
-| `mergeForward` | `false` | 长回复改用合并转发，仅 OneBot 支持 |
-| `allowUsers` | 空 | 用户白名单，写 `平台:用户ID`；留空则谁都不能用 |
+| `chunkLength` | `1500` | 每段与每个转发节点的最大字数 |
+| `mergeForward` | `false` | 长回复合并转发，仅 OneBot |
+
+### 交互
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `naturalLanguagePrivate` | `false` | 私聊里不带前缀的消息直接交给 DSH |
+| `chatIdleMinutes` | `30` | 多少分钟内交互过才直通 |
+| `pollInterval` | `1200` | 结果轮询间隔（毫秒） |
+| `promptTimeout` | `600` | 单轮等待上限（秒），超时后继续执行并补发 |
+| `clientTimeZone` | `Asia/Shanghai` | 随任务提交的时区 |
+| `historyLimit` | `5` | `dsh.history` 默认条数 |
+
+### 权限
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `allowUsers` | 空 | 用户白名单，写 `平台:用户ID` 或裸 ID；留空谁都不能用 |
 | `defaultPermission` | 不设置 | 新建会话使用的权限预设 |
-| `enableImages` | `true` | 回传图片与附件 |
+
+### 附件
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `enableImages` | `true` | 回传图片 |
 | `maxImages` | `6` | 单轮图片上限，`0` 表示关闭 |
 | `maxImageMb` | `8` | 单张图片体积上限（MB） |
 | `enableFiles` | `true` | 收发文件 |
 | `maxFileMb` | `20` | 单个文件体积上限（MB） |
+
+### 用量
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
 | `showUsage` | `true` | 每轮回复后附带 token 用量 |
 | `showCost` | `true` | 用量里同时给出估算费用 |
-| `balanceWarning` | `0` | 余额低于该金额（元）时提醒，`0` 表示关闭 |
+| `balanceWarning` | `0` | 余额低于该金额（元）时提醒，`0` 关闭 |
 | `debug` | `false` | 输出调试日志 |
 
-运行依赖 `ws`，用于接收 DSH 的授权请求。
+## 说明
+
+- **绑定**：每个聊天独立绑定会话；未绑定时 `dsh.run` 自动新建。
+- **会话列表**：分组、排序、筛选与 DSH 界面一致，组名就是工作区名，归档状态取自工作区基线；不在任何工作区的会话归入「未分组」。
+- **附件**：消息附带的图片与文件会一起提交。QQ 无法把文字和文件放进同一条消息，引用一条带附件的消息再发 `dsh.run` 即可。
+- **交互**：agent 提问时回复序号即可（多选逗号分隔，也可回文字）；任一边回答都有效，聊天的待答状态在回合结束或 5 分钟后失效。任务运行中可用 `dsh.steer` 补充指令。
+- **超时**：等待超时后任务不会丢，后台继续跟踪并把结果补发到原聊天。
+- **自然语言**：`dsh.chat on` 后私聊里的普通消息直接交给 DSH；配置项 `naturalLanguagePrivate` 需要最近有过交互才生效。
+- **用量**：DSH 没有花费接口，`showCost` 按官方价目表（区分缓存命中与高峰时段）估算，仅供参考。
 
 ## License
 

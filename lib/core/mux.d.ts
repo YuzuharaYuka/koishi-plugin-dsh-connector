@@ -38,13 +38,24 @@ export interface WorkspaceSnapshot {
     archived: string[];
     pinned: string[];
 }
+/** 工作区流的增量：归档/置顶都是整表替换 */
+export type WorkspaceUpdate = {
+    kind: 'baseline';
+    snapshot: WorkspaceSnapshot;
+} | {
+    kind: 'archived';
+    archived: string[];
+} | {
+    kind: 'pinned';
+    pinned: string[];
+};
 export interface EventBridgeOptions {
     wsUrl: string;
     baseUrl: string;
     getCookie: () => Promise<string>;
     onApproval: (request: ApprovalRequest) => void;
     onQuestion?: (request: QuestionRequest) => void;
-    onWorkspace?: (snapshot: WorkspaceSnapshot) => void;
+    onWorkspace?: (update: WorkspaceUpdate) => void;
     debug: boolean;
 }
 /**

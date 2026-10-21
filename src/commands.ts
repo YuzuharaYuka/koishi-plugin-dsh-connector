@@ -3,6 +3,7 @@ import type { Config } from './config'
 import {
   checkAccess,
   handleApproval,
+  handleArchive,
   handleBalance,
   handleChatMode,
   handleContextCommand,
@@ -39,6 +40,7 @@ const HELP_TEXT = [
   '· dsh.chat on/off：私聊自然语言模式',
   '· dsh.stop：停止当前任务',
   '· dsh.history [条数]：回放最近回复',
+  '· dsh.archive / dsh.unarchive：归档或恢复会话',
   '· dsh.model [序号] [等级]：查看或切换模型',
   '· dsh.think [等级]：调整思考等级',
   '· dsh.get 路径：取回工作区文件',
@@ -202,6 +204,23 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     .example('dsh.run 列出当前目录下的文件')
     .example('（引用一个文件后）dsh.run 把这个文件转成 pdf')
     .action(({ session }, text) => action(session, (session) => handleRun(deps, session, text ?? '')))
+
+  ctx.command('dsh.archive [target:string]', '归档会话')
+    .alias('dsh归档')
+    .usage('参数可以是会话列表里的序号、会话 ID 或唯一前缀；省略时归档当前绑定的会话。')
+    .example('dsh.archive')
+    .example('dsh.archive 3')
+    .action(({ session }, target) =>
+      action(session, (session) => handleArchive(deps, session, target ?? undefined, true)),
+    )
+
+  ctx.command('dsh.unarchive [target:string]', '取消归档')
+    .alias('dsh取消归档')
+    .usage('把会话从归档里恢复；参数规则与 dsh.archive 相同。')
+    .example('dsh.unarchive 3')
+    .action(({ session }, target) =>
+      action(session, (session) => handleArchive(deps, session, target ?? undefined, false)),
+    )
 
   ctx.command('dsh.stop', '停止当前任务')
     .alias('dsh停止')

@@ -882,6 +882,45 @@ export async function handleApproval(
   return decision === 'allow' ? MESSAGES.approveSent : MESSAGES.denySent
 }
 
+/** 解析会话目标：序号（最近一次列表）、完整 ID 或唯一前缀；省略时用当前绑定 */
+async function resolveSessionTarget(
+  deps: HandlerDeps,
+  session: Session,
+  target?: string,
+): Promise<string | undefined> {
+  const value = (target ?? '').trim()
+  if (!value) return bindingOf(deps, session)?.sessionId
+
+  if (/^\d+$/.test(value)) {
+    const listing = deps.listings.get(sessionKey(session))
+    return listing?.[Number(value) - 1]?.sessionId
+  }
+
+  const sessions = await deps.client.listSessions({ includeChildren: true, includeBlank: true })
+  return (
+    sessions.find((item) => item.sessionId === value)?.sessionId ??
+    sessions.find((item) => item.sessionId.startsWith(value))?.sessionId
+  )
+}
+
+/** 归档或取消归档会话 */
+export async function handleArchive(
+  deps: HandlerDeps,
+  session: Session,
+  target: string | undefined,
+  archive: boolean,
+): Promise<string> {
+  const sessionId = await resolveSessionTarget(deps, session, target)
+  if (!sessionId) return MESSAGES.sessionMissing
+
+  if (archive) await deps.client.archiveSession(sessionId)
+  else await deps.client.unarchiveSession(sessionId)
+
+  return archive
+    ? `已归档：${shortSessionId(sessionId)}`
+    : `已取消归档：${shortSessionId(sessionId)}`
+}
+
 /** 把提问渲染成聊天里能直接回答的形式 */
 export function renderQuestions(questions: QuestionItem[]): string {
   const lines: string[] = []

@@ -309,8 +309,17 @@ export class DshClient {
       onQuestion: (request) => {
         this.questionHandler?.(request)
       },
-      onWorkspace: (snapshot) => {
-        this.workspace = snapshot
+      onWorkspace: (update) => {
+        if (update.kind === 'baseline') {
+          this.workspace = update.snapshot
+          return
+        }
+        if (!this.workspace) return
+        if (update.kind === 'archived') {
+          this.workspace = { ...this.workspace, archived: update.archived }
+        } else {
+          this.workspace = { ...this.workspace, pinned: update.pinned }
+        }
       },
     })
     this.bridge.start()
@@ -829,6 +838,16 @@ export class DshClient {
         clientTimeZone: normalizeTimeZone(this.config.clientTimeZone),
       },
     })
+  }
+
+  /** 归档会话：从工作区视图里隐藏 */
+  async archiveSession(sessionId: string, stopActivity = false): Promise<void> {
+    await this.rpc('workspace/archiveSession', { request: { sessionId, stopActivity } })
+  }
+
+  /** 取消归档 */
+  async unarchiveSession(sessionId: string): Promise<void> {
+    await this.rpc('workspace/unarchiveSession', { request: { sessionId } })
   }
 
   /** 执行会话级斜杠命令（/compact、/permission 等） */

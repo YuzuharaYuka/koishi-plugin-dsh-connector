@@ -189,6 +189,10 @@ export declare class DshClient {
     }>): Promise<void>;
     /** 把补充指令注入正在运行的回合 */
     steer(sessionId: string, text: string): Promise<void>;
+    /** 归档会话：从工作区视图里隐藏 */
+    archiveSession(sessionId: string, stopActivity?: boolean): Promise<void>;
+    /** 取消归档 */
+    unarchiveSession(sessionId: string): Promise<void>;
     /** 执行会话级斜杠命令（/compact、/permission 等） */
     runCommand(sessionId: string, line: string): Promise<{
         kind: string;

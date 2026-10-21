@@ -29,6 +29,7 @@ export const usage = `
 | \`dsh.new [目录/序号]\` | \`dsh新建\` | 新建并绑定会话 |
 | \`dsh.workspaces\` | \`dsh工作区\` | 列出已知工作区 |
 | \`dsh.use 序号\` | \`dsh切换\` | 按序号或 ID 绑定 |
+| \`dsh.archive [序号]\` / \`dsh.unarchive [序号]\` | \`dsh归档\` / \`dsh取消归档\` | 归档或恢复会话 |
 | \`dsh.run 内容\` | \`dsh运行\` | 交给 DSH 执行 |
 | \`dsh.steer 内容\` | \`dsh插话\` | 往运行中的任务补充指令 |
 | \`dsh.compact\` / \`dsh.clear\` | \`dsh压缩\` / \`dsh清空\` | 压缩或清空上下文 |

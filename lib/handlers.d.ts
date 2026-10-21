@@ -77,6 +77,8 @@ export declare function handleThink(deps: HandlerDeps, session: Session, effort?
 export declare function handleGet(deps: HandlerDeps, session: Session, path?: string): Promise<h.Fragment>;
 export declare function handleHistory(deps: HandlerDeps, session: Session, limit?: number): Promise<string>;
 export declare function handleApproval(deps: HandlerDeps, session: Session, decision: ApprovalDecision): Promise<string>;
+/** 归档或取消归档会话 */
+export declare function handleArchive(deps: HandlerDeps, session: Session, target: string | undefined, archive: boolean): Promise<string>;
 /** 把提问渲染成聊天里能直接回答的形式 */
 export declare function renderQuestions(questions: QuestionItem[]): string;
 /** 解析用户回答；多选题按序号返回 label，其它文字当作自定义回答 */
