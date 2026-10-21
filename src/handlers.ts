@@ -22,7 +22,7 @@ import {
   type TurnResult,
 } from './services/dsh'
 import { bindingKey, type BindingStore, type ChannelBinding } from './services/store'
-import { getErrorMessage, logger, truncate } from './utils'
+import { getErrorMessage, debugLog, logger, truncate } from './utils'
 
 const INCOMING_IMAGE_TIMEOUT_MS = 15000
 /** 单轮最多接收多少个聊天文件 */
@@ -219,7 +219,7 @@ async function loadIncomingAttachments(
   for (const item of collectSessionFiles(session).slice(-MAX_INCOMING_FILES)) {
     const loaded = await loadFileSource(item.src, item.name, maxBytes, INCOMING_IMAGE_TIMEOUT_MS)
     if (!loaded) {
-      logger.debug(`[media] 文件读取失败或超出上限: ${item.name || item.src}`)
+      debugLog(deps.config.debug, 'media', `文件读取失败或超出上限: ${item.name || item.src}`)
       continue
     }
     try {

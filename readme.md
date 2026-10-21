@@ -8,6 +8,8 @@ npm i koishi-plugin-dsh-connector
 
 需要 Koishi 4.18 及以上，且 DSH 网页服务正在运行；两者建议以同一系统用户运行，否则配置 `dshHome`。
 
+> 配置页右侧有可拖动的悬浮导航，点击分组名即可跳转；readme 的配置表也按同一顺序分组。
+
 [指令](#指令) · [配置](#配置) · [说明](#说明) · [License](#license)
 
 ## 指令
@@ -99,7 +101,12 @@ npm i koishi-plugin-dsh-connector
 | `showUsage` | `true` | 每轮回复后附带 token 用量 |
 | `showCost` | `true` | 用量里同时给出估算费用 |
 | `balanceWarning` | `0` | 余额低于该金额（元）时提醒，`0` 关闭 |
-| `debug` | `false` | 输出调试日志 |
+
+### 调试
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `debug` | `false` | 输出连接、RPC、事件桥、提问与回合过程的日志 |
 
 ## 说明
 

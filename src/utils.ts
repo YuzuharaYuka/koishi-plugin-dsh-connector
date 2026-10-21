@@ -3,6 +3,11 @@ import { LOGGER_NAME } from './constants'
 
 export const logger = new Logger(LOGGER_NAME)
 
+/** 统一调试日志：只有开启 debug 才输出，带 scope 便于过滤 */
+export function debugLog(enabled: boolean, scope: string, message: string): void {
+  if (enabled) logger.info(`[${scope}] ${message}`)
+}
+
 /** 统一提取错误信息，不把异常对象直接抛给用户 */
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message

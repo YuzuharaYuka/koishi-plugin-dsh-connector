@@ -1,5 +1,7 @@
 import { Logger } from 'koishi';
 export declare const logger: Logger;
+/** 统一调试日志：只有开启 debug 才输出，带 scope 便于过滤 */
+export declare function debugLog(enabled: boolean, scope: string, message: string): void;
 /** 统一提取错误信息，不把异常对象直接抛给用户 */
 export declare function getErrorMessage(error: unknown): string;
 /** 可被 AbortSignal 打断的等待 */

@@ -17,7 +17,7 @@ import {
   type WorkspaceSnapshot,
 } from '../core/mux'
 import { DshRpcError, callRpc, callRpcMultipart } from '../core/rpc'
-import { logger, normalizeTimeZone, sleep } from '../utils'
+import { debugLog, logger, normalizeTimeZone, sleep } from '../utils'
 import { diffUsage, EMPTY_USAGE, type TokenUsage } from '../core/pricing'
 
 const AUTH_TIMEOUT_MS = 15000
@@ -230,10 +230,12 @@ export class DshClient {
   }
 
   private async connect(): Promise<void> {
+    const started = Date.now()
     if (this.relayMode) {
       if (!this.config.baseUrl) {
         throw new DshAuthError('relay 模式需要填写配置项 `baseUrl`，例如 `http://192.168.192.100`。')
       }
+      debugLog(this.config.debug, 'connect', `relay 模式，登录 ${this.config.baseUrl}`)
       const baseUrl = parseBaseUrl(this.config.baseUrl)
       const cookie = await loginRelay(baseUrl, this.config.accessKey, AUTH_TIMEOUT_MS)
       this.baseUrl = baseUrl
@@ -241,12 +243,15 @@ export class DshClient {
       this.authority = new URL(baseUrl).host
     } else {
       const home = resolveDshHome(this.config.dshHome)
+      debugLog(this.config.debug, 'connect', `直连模式，凭据目录 ${home}`)
       this.secret = await readBrowserSessionSecret(home)
       let baseUrl = this.config.baseUrl
       if (!baseUrl) {
+        debugLog(this.config.debug, 'connect', `未配置地址，开始发现端口（上次 ${this.preferredPort ?? '无'}）`)
         const port = await discoverDshPort(this.preferredPort)
         if (port === undefined) throw new DshAuthError(DISCOVERY_HINT)
         this.preferredPort = port
+        debugLog(this.config.debug, 'connect', `发现端口 ${port}`)
         baseUrl = `http://127.0.0.1:${port}`
       }
       const resolved = parseBaseUrl(baseUrl)
@@ -257,7 +262,11 @@ export class DshClient {
       this.cookie = cookie
     }
 
-    logger.debug(`[client] 已连接 ${this.baseUrl} (${this.relayMode ? 'relay' : 'direct'})`)
+    debugLog(
+      this.config.debug,
+      'connect',
+      `已连接 ${this.baseUrl} (${this.relayMode ? 'relay' : 'direct'}) 用时 ${Date.now() - started}ms`,
+    )
     this.startBridge()
   }
 
@@ -327,7 +336,22 @@ export class DshClient {
 
   private async rawRpc(method: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
     if (!this.baseUrl || !this.cookie) throw new DshAuthError('DSH 连接尚未就绪')
-    return callRpc({ baseUrl: this.baseUrl, cookie: this.cookie, method, args, timeoutMs })
+    const started = Date.now()
+    try {
+      const value = await callRpc({ baseUrl: this.baseUrl, cookie: this.cookie, method, args, timeoutMs })
+      debugLog(this.config.debug, 'rpc', `${method} (${Date.now() - started}ms)`)
+      return value
+    } catch (error) {
+      const code = error instanceof DshRpcError ? error.code : 'unknown'
+      debugLog(
+        this.config.debug,
+        'rpc',
+        `${method} 失败 (${Date.now() - started}ms) ${code}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      throw error
+    }
   }
 
   /** 结果带二进制的接口走 multipart，重试策略与普通 RPC 一致 */
@@ -599,6 +623,11 @@ export class DshClient {
     for (const file of files) {
       content.push({ type: 'file', receiptId: file.receiptId })
     }
+    debugLog(
+      this.config.debug,
+      'prompt',
+      `提交 session=${sessionId} 文字=${text.length} 字 图片=${images.length} 文件=${files.length}`,
+    )
     await this.rpc('session/prompt', {
       request: {
         requestId: randomUUID(),
@@ -715,6 +744,8 @@ export class DshClient {
     timeoutMs = this.config.promptTimeout * 1000,
   ): Promise<Omit<TurnResult, 'usage' | 'model'>> {
     const deadline = Date.now() + timeoutMs
+    const started = Date.now()
+    debugLog(this.config.debug, 'turn', `等待 session=${sessionId} 从 seq=${baseline} 开始，上限 ${Math.round(timeoutMs / 1000)}s`)
     let lastSeen = ''
     let lastCursor = baseline
 
@@ -753,12 +784,18 @@ export class DshClient {
             }
           }
           const resolved = await this.resolveImages(sessionId, refs)
+          debugLog(
+            this.config.debug,
+            'turn',
+            `完成 session=${sessionId} 用时 ${Date.now() - started}ms 回复 ${text.length} 字 图片 ${resolved.images.length} 张 跳过 ${resolved.skipped}`,
+          )
           return { text: text || lastSeen, images: resolved.images, skipped: resolved.skipped, seq: cursor }
         }
       }
       await sleep(this.config.pollInterval)
     }
 
+    debugLog(this.config.debug, 'turn', `超时 session=${sessionId} 已等 ${Date.now() - started}ms`)
     throw new DshTurnTimeout(lastSeen, baseline)
   }
 
@@ -829,6 +866,7 @@ export class DshClient {
 
   /** 把补充指令注入正在运行的回合 */
   async steer(sessionId: string, text: string): Promise<void> {
+    debugLog(this.config.debug, 'steer', `session=${sessionId} ${text.length} 字`)
     await this.rpc('session/prompt', {
       request: {
         requestId: randomUUID(),
@@ -842,16 +880,19 @@ export class DshClient {
 
   /** 归档会话：从工作区视图里隐藏 */
   async archiveSession(sessionId: string, stopActivity = false): Promise<void> {
+    debugLog(this.config.debug, 'archive', `归档 ${sessionId} stopActivity=${stopActivity}`)
     await this.rpc('workspace/archiveSession', { request: { sessionId, stopActivity } })
   }
 
   /** 取消归档 */
   async unarchiveSession(sessionId: string): Promise<void> {
+    debugLog(this.config.debug, 'archive', `取消归档 ${sessionId}`)
     await this.rpc('workspace/unarchiveSession', { request: { sessionId } })
   }
 
   /** 执行会话级斜杠命令（/compact、/permission 等） */
   async runCommand(sessionId: string, line: string): Promise<{ kind: string; text: string }> {
+    debugLog(this.config.debug, 'command', `session=${sessionId} 执行 ${line}`)
     const value = (await this.rpc('commands/execute', {
       agentId: sessionId,
       line,

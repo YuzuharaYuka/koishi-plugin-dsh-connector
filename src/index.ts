@@ -14,7 +14,7 @@ import {
 } from './handlers'
 import { DshClient, type DshSessionSummary } from './services/dsh'
 import { BindingStore, bindingKey } from './services/store'
-import { getErrorMessage, logger } from './utils'
+import { getErrorMessage, debugLog, logger } from './utils'
 
 export * from './config'
 export const name = PLUGIN_NAME
@@ -64,6 +64,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const lastActive = new Map<string, number>()
 
   ctx.on('ready', async () => {
+    debugLog(config.debug, 'plugin', `启动，白名单 ${config.allowUsers.length} 人，模式 ${config.mode}`)
     await store.load()
     if (config.allowUsers.length === 0) {
       logger.warn('未配置用户白名单，所有指令都会被拒绝；用 dsh.whoami 取到标识后填入 allowUsers。')
@@ -72,6 +73,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       await client.ensureReady()
       const info = client.describe()
       logger.info(`已连接 DSH (${info.mode}) ${info.baseUrl ?? ''}`)
+      debugLog(config.debug, 'plugin', `事件桥 ${info.bridge ? '已连接' : '未连接'}`)
     } catch (error) {
       // 连不上不该拖垮 Koishi；指令触发时还会再试一次
       logger.error('连接 DSH 失败，插件暂不可用。')
@@ -83,9 +85,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   client.setApprovalHandler((request) => {
     const binding = request.sessionId ? store.findBySession(request.sessionId) : undefined
     if (!binding) {
-      logger.debug('[approval] 没有对应的聊天绑定，跳过推送')
+      debugLog(config.debug, 'approval', '没有对应的聊天绑定，跳过推送')
       return
     }
+    debugLog(
+      config.debug,
+      'approval',
+      `推送到 ${binding.platform}:${binding.channelId} tool=${request.tool ?? '未知'}`,
+    )
     const bot = ctx.bots.find((item) => item.platform === binding.platform && item.selfId === binding.selfId)
     if (!bot) {
       logger.warn('[approval] 找不到对应的机器人实例，无法推送授权请求。')
@@ -111,9 +118,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   client.setQuestionHandler((request) => {
     const binding = store.findBySession(request.sessionId)
     if (!binding) {
-      logger.debug('[question] 没有对应的聊天绑定，跳过推送')
+      debugLog(config.debug, 'question', '没有对应的聊天绑定，跳过推送')
       return
     }
+    debugLog(
+      config.debug,
+      'question',
+      `推送到 ${binding.platform}:${binding.channelId} 共 ${request.questions.length} 个问题`,
+    )
     const key = bindingKey(binding.platform, binding.selfId, binding.channelId)
     questions.set(key, {
       sessionId: request.sessionId,
@@ -151,6 +163,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
   })
 
   registerCommands(deps, config)
+
+  // 配置页右侧的悬浮导航（客户端 Vue 组件）
+  ctx.inject(['console'], (ctx) => {
+    const console = (ctx as unknown as { console: { addEntry(entry: { dev: string; prod: string }): void } })
+      .console
+    console.addEntry({
+      dev: join(__dirname, '../client/index.ts'),
+      prod: join(__dirname, '../dist'),
+    })
+  })
 
   ctx.on('dispose', () => {
     client.dispose()

@@ -25,7 +25,7 @@ import {
   touchSession,
   type HandlerDeps,
 } from './handlers'
-import { getErrorMessage, logger } from './utils'
+import { debugLog, getErrorMessage, logger } from './utils'
 
 const HELP_TEXT = [
   '可用指令',
@@ -72,6 +72,7 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
     if (!session) return ''
     // 机器人不该驱动 DSH：忽略机器人发来的消息，避免两个 bot 互相触发
     if (isBotSender(session)) return ''
+    debugLog(config.debug, 'command', `${session.platform}:${session.userId} 触发 ${(session.content ?? '').slice(0, 80)}`)
     if (!options?.ignoreAccess) {
       const denied = checkAccess(config, session)
       if (denied) return denied

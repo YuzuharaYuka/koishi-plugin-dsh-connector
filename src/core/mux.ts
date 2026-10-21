@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import { callRpc } from './rpc'
-import { logger } from '../utils'
+import { debugLog, logger } from '../utils'
 
 export interface WaterfallFrame {
   [key: string]: unknown
@@ -241,6 +241,7 @@ export class EventBridge {
 
   private scheduleReconnect(): void {
     if (this.closed || this.retryTimer) return
+    debugLog(this.options.debug, 'mux', `将在 ${this.delay}ms 后重连`)
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined
       void this.connect()
@@ -250,6 +251,7 @@ export class EventBridge {
 
   private async connect(): Promise<void> {
     if (this.closed) return
+    debugLog(this.options.debug, 'mux', `连接 ${this.options.wsUrl}`)
 
     let cookie: string
     try {
@@ -275,6 +277,7 @@ export class EventBridge {
     this.socket = socket
 
     socket.on('open', () => {
+      debugLog(this.options.debug, 'mux', '已连接，订阅 $events 与 workspace/follow')
       socket.send(JSON.stringify({
         type: 'open',
         streamId: EVENTS_STREAM,
@@ -296,13 +299,12 @@ export class EventBridge {
     })
 
     socket.on('error', (error: Error) => {
-      if (this.options.debug) {
-        // 断线属于常态，只在调试时输出
-        logger.debug(`[mux] 事件桥错误: ${error.message}`)
-      }
+      // 断线属于常态，只在调试时输出
+      debugLog(this.options.debug, 'mux', `连接错误: ${error.message}`)
     })
 
     socket.on('close', () => {
+      debugLog(this.options.debug, 'mux', '连接关闭')
       this.readyClientId = undefined
       this.socket = undefined
       this.scheduleReconnect()
@@ -330,7 +332,14 @@ export class EventBridge {
 
       if (type === 'baseline' || type === 'replace') {
         const snapshot = readWorkspaceSnapshot(payload)
-        if (snapshot) this.options.onWorkspace?.({ kind: 'baseline', snapshot })
+        if (snapshot) {
+          debugLog(
+            this.options.debug,
+            'workspace',
+            `基线：${snapshot.workspaces.length} 个工作区，${snapshot.archived.length} 个归档`,
+          )
+          this.options.onWorkspace?.({ kind: 'baseline', snapshot })
+        }
       } else if (type === 'archived') {
         this.options.onWorkspace?.({ kind: 'archived', archived: toIds(payload.archivedSessionIds) })
       } else if (type === 'pinned') {
@@ -344,24 +353,33 @@ export class EventBridge {
     if (payload.type === 'ready') {
       const clientId = typeof payload.clientId === 'string' ? payload.clientId : ''
       this.readyClientId = clientId || undefined
+      debugLog(this.options.debug, 'mux', `事件桥就绪 clientId=${clientId || '无'}`)
       return
     }
 
     const question = readQuestionFrame(payload)
     if (question) {
+      debugLog(
+        this.options.debug,
+        'question',
+        `收到提问 ${question.questions.length} 个 session=${question.sessionId} callId=${question.eventId}`,
+      )
       this.options.onQuestion?.(question)
       return
     }
 
     const approval = readApprovalFrame(payload)
     if (approval) {
+      debugLog(
+        this.options.debug,
+        'approval',
+        `收到授权请求 tool=${approval.tool ?? '未知'} session=${approval.sessionId ?? '未知'} event=${approval.eventId}`,
+      )
       this.options.onApproval(approval)
       return
     }
 
-    if (this.options.debug) {
-      logger.debug(`[mux] 未识别的事件帧: ${text.slice(0, 400)}`)
-    }
+    debugLog(this.options.debug, 'mux', `未识别的事件帧: ${text.slice(0, 400)}`)
   }
 
   /** 把授权结论回送给 DSH，`value` 由调用方按 DSH 的 outcome 词表给出 */

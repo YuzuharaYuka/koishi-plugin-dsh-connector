@@ -199,10 +199,13 @@ export const Config: Schema<Config> = Schema.intersect([
       .step(1)
       .default(0)
       .description('**余额告警**<br>低于该金额（元）时提醒，`0` 关闭'),
+  }).description('用量'),
+
+  Schema.object({
     debug: Schema.boolean()
       .default(false)
-      .description('**调试日志**<br>输出 RPC 与事件帧'),
-  }).description('用量'),
+      .description('**调试日志**<br>输出连接、RPC、事件桥、提问与回合过程'),
+  }).description('调试'),
 ])
 
 /** 运行时夹逼：`koishi.yml` 手改或旧配置升级都可能绕过 Schema 约束 */
