@@ -96,6 +96,8 @@ export declare class DshClient {
     private preferredPort?;
     private connecting?;
     private bridge?;
+    /** 正在等待回合结束的次数：非零时事件桥不进入空闲挂起 */
+    private activeWaits;
     private readonly pending;
     private approvalHandler?;
     private questionHandler?;

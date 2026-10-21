@@ -1,4 +1,4 @@
-// external/dsh-connector/client/index.ts
+// client/index.ts
 import { defineComponent, h, inject, onUnmounted, ref } from "vue";
 var NAV_SECTIONS = [
   {

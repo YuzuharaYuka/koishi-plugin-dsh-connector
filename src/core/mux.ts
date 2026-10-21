@@ -62,13 +62,16 @@ export interface EventBridgeOptions {
   onApproval: (request: ApprovalRequest) => void
   onQuestion?: (request: QuestionRequest) => void
   onWorkspace?: (update: WorkspaceUpdate) => void
+  /** 是否空闲：空闲时连续失败会暂停重连，等下次使用插件再唤醒 */
+  isIdle?: () => boolean
   debug: boolean
 }
 
 const EVENTS_STREAM = 'koishi-plugin-dsh'
 const WORKSPACE_STREAM = 'koishi-plugin-dsh-workspace'
 
-function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapshot | null {  const payload = (value.value ?? value) as Record<string, unknown>
+function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapshot | null {
+  const payload = (value.value ?? value) as Record<string, unknown>
   const items = payload.items
   if (!Array.isArray(items)) return null
 
@@ -99,8 +102,12 @@ function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapsho
   }
 }
 
-const RECONNECT_MIN_MS = 2000
-const RECONNECT_MAX_MS = 30000
+/** 重连退避阶梯：长时间离线时降到 5 分钟一次 */
+const RECONNECT_DELAYS_MS = [2000, 5000, 15000, 30000, 60000, 120000, 300000]
+/** 空闲时连续失败多少次后暂停重连，等下一次使用插件时唤醒 */
+const SUSPEND_AFTER_FAILURES = 5
+/** 失败日志的最小间隔，避免 debug 模式下刷屏 */
+const FAILURE_LOG_INTERVAL_MS = 5 * 60 * 1000
 const RESULT_TIMEOUT_MS = 15000
 
 function pickString(source: Record<string, unknown>, keys: string[]): string | undefined {
@@ -207,7 +214,14 @@ export class EventBridge {
   private retryTimer?: NodeJS.Timeout
   private closed = false
   private readyClientId?: string
-  private delay = RECONNECT_MIN_MS
+  /** 退避阶梯下标 */
+  private delayIndex = 0
+  /** 连续失败次数，连接成功后清零 */
+  private failures = 0
+  /** 空闲且连续失败过多时暂停重连，等 resume() 唤醒 */
+  private suspended = false
+  private lastFailureLogAt = 0
+  private connecting = false
 
   constructor(private readonly options: EventBridgeOptions) {}
 
@@ -219,8 +233,24 @@ export class EventBridge {
     return this.readyClientId !== undefined
   }
 
+  get isSuspended(): boolean {
+    return this.suspended
+  }
+
   start(): void {
     if (this.closed) return
+    this.suspended = false
+    this.delayIndex = 0
+    void this.connect()
+  }
+
+  /** 被指令唤醒：暂停中的桥重新开始连接 */
+  resume(): void {
+    if (this.closed || !this.suspended) return
+    this.suspended = false
+    this.delayIndex = 0
+    this.failures = 0
+    debugLog(this.options.debug, 'mux', '收到唤醒，恢复连接')
     void this.connect()
   }
 
@@ -241,24 +271,69 @@ export class EventBridge {
 
   private scheduleReconnect(): void {
     if (this.closed || this.retryTimer) return
-    debugLog(this.options.debug, 'mux', `将在 ${this.delay}ms 后重连`)
+    const delay = RECONNECT_DELAYS_MS[Math.min(this.delayIndex, RECONNECT_DELAYS_MS.length - 1)]
+    this.delayIndex += 1
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined
       void this.connect()
-    }, this.delay)
-    this.delay = Math.min(this.delay * 2, RECONNECT_MAX_MS)
+    }, delay)
+  }
+
+  /** 失败日志只在首次、或距上次超过 5 分钟时输出 */
+  private shouldLogFailure(): boolean {
+    const now = Date.now()
+    if (this.failures <= 1 || now - this.lastFailureLogAt >= FAILURE_LOG_INTERVAL_MS) {
+      this.lastFailureLogAt = now
+      return true
+    }
+    return false
+  }
+
+  /** 连接失败后的统一处理：记录次数，空闲时暂停，否则退避重试 */
+  private handleFailure(reason: string): void {
+    this.failures += 1
+    const idle = this.options.isIdle?.() ?? true
+    if (idle && this.failures >= SUSPEND_AFTER_FAILURES) {
+      this.suspended = true
+      if (this.shouldLogFailure()) {
+        debugLog(
+          this.options.debug,
+          'mux',
+          `连续失败 ${this.failures} 次（${reason}），已暂停重连；下次使用插件时自动恢复`,
+        )
+      }
+      return
+    }
+    if (this.shouldLogFailure()) {
+      const delay = RECONNECT_DELAYS_MS[Math.min(this.delayIndex, RECONNECT_DELAYS_MS.length - 1)]
+      debugLog(
+        this.options.debug,
+        'mux',
+        `第 ${this.failures} 次失败（${reason}），${Math.round(delay / 1000)} 秒后重试`,
+      )
+    }
+    this.scheduleReconnect()
   }
 
   private async connect(): Promise<void> {
-    if (this.closed) return
+    if (this.closed || this.connecting || this.socket || this.retryTimer) return
+    this.connecting = true
+    try {
+      await this.openSocket()
+    } finally {
+      this.connecting = false
+    }
+  }
+
+  private async openSocket(): Promise<void> {
     debugLog(this.options.debug, 'mux', `连接 ${this.options.wsUrl}`)
 
     let cookie: string
     try {
       cookie = await this.options.getCookie()
-    } catch {
+    } catch (error) {
       // 凭据暂时取不到（DSH 未就绪等），退避后重试，不影响插件其它能力
-      this.scheduleReconnect()
+      this.handleFailure(`凭据不可用: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
     if (this.closed) return
@@ -270,14 +345,16 @@ export class EventBridge {
       })
     } catch (error) {
       // 地址非法等构造期错误：退避重试，不要把异常抛给上层
-      logger.debug(`[mux] 建立连接失败: ${error instanceof Error ? error.message : String(error)}`)
-      this.scheduleReconnect()
+      this.handleFailure(`建立连接失败: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
     this.socket = socket
 
     socket.on('open', () => {
       debugLog(this.options.debug, 'mux', '已连接，订阅 $events 与 workspace/follow')
+      this.failures = 0
+      this.delayIndex = 0
+      this.suspended = false
       socket.send(JSON.stringify({
         type: 'open',
         streamId: EVENTS_STREAM,
@@ -291,7 +368,6 @@ export class EventBridge {
         endpoint: 'workspace/follow',
         payload: { args: {} },
       }))
-      this.delay = RECONNECT_MIN_MS
     })
 
     socket.on('message', (raw: WebSocket.RawData) => {
@@ -299,15 +375,15 @@ export class EventBridge {
     })
 
     socket.on('error', (error: Error) => {
-      // 断线属于常态，只在调试时输出
+      // 具体错误由 close 统一处理，这里只在调试时记录
       debugLog(this.options.debug, 'mux', `连接错误: ${error.message}`)
     })
 
     socket.on('close', () => {
-      debugLog(this.options.debug, 'mux', '连接关闭')
       this.readyClientId = undefined
       this.socket = undefined
-      this.scheduleReconnect()
+      if (this.closed) return
+      this.handleFailure('连接被关闭')
     })
   }
 

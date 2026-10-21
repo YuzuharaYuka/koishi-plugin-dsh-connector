@@ -195,6 +195,8 @@ export class DshClient {
   private preferredPort?: number
   private connecting?: Promise<void>
   private bridge?: EventBridge
+  /** 正在等待回合结束的次数：非零时事件桥不进入空闲挂起 */
+  private activeWaits = 0
   private readonly pending: ApprovalRequest[] = []
   private approvalHandler?: (request: ApprovalRequest) => void
   private questionHandler?: (request: QuestionRequest) => void
@@ -220,7 +222,11 @@ export class DshClient {
   }
 
   async ensureReady(): Promise<void> {
-    if (this.baseUrl && this.cookie) return
+    if (this.baseUrl && this.cookie) {
+      // 事件桥可能在空闲时被挂起，任何一次使用都当作唤醒信号
+      this.bridge?.resume()
+      return
+    }
     if (!this.connecting) {
       this.connecting = this.connect().finally(() => {
         this.connecting = undefined
@@ -330,6 +336,7 @@ export class DshClient {
           this.workspace = { ...this.workspace, pinned: update.pinned }
         }
       },
+      isIdle: () => this.activeWaits === 0,
     })
     this.bridge.start()
   }
@@ -745,9 +752,12 @@ export class DshClient {
   ): Promise<Omit<TurnResult, 'usage' | 'model'>> {
     const deadline = Date.now() + timeoutMs
     const started = Date.now()
-    debugLog(this.config.debug, 'turn', `等待 session=${sessionId} 从 seq=${baseline} 开始，上限 ${Math.round(timeoutMs / 1000)}s`)
-    let lastSeen = ''
-    let lastCursor = baseline
+    // 等待回合期间不算空闲，事件桥保持重连
+    this.activeWaits += 1
+    try {
+      debugLog(this.config.debug, 'turn', `等待 session=${sessionId} 从 seq=${baseline} 开始，上限 ${Math.round(timeoutMs / 1000)}s`)
+      let lastSeen = ''
+      let lastCursor = baseline
 
     while (Date.now() < deadline) {
       const cursor = await this.cursor(sessionId)
@@ -795,8 +805,11 @@ export class DshClient {
       await sleep(this.config.pollInterval)
     }
 
-    debugLog(this.config.debug, 'turn', `超时 session=${sessionId} 已等 ${Date.now() - started}ms`)
-    throw new DshTurnTimeout(lastSeen, baseline)
+      debugLog(this.config.debug, 'turn', `超时 session=${sessionId} 已等 ${Date.now() - started}ms`)
+      throw new DshTurnTimeout(lastSeen, baseline)
+    } finally {
+      this.activeWaits -= 1
+    }
   }
 
   /** 把图片引用换成可以直接发送的数据；失败的只计数，不阻断文本回传 */
