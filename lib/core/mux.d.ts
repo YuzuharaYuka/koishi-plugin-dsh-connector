@@ -26,12 +26,25 @@ export interface QuestionRequest {
     questions: QuestionItem[];
     raw: WaterfallFrame;
 }
+export interface WorkspaceInfo {
+    id: string;
+    path: string;
+    title: string;
+    sessionIds: string[];
+}
+/** DSH 的工作区基线：工作区成员关系、归档与置顶会话 */
+export interface WorkspaceSnapshot {
+    workspaces: WorkspaceInfo[];
+    archived: string[];
+    pinned: string[];
+}
 export interface EventBridgeOptions {
     wsUrl: string;
     baseUrl: string;
     getCookie: () => Promise<string>;
     onApproval: (request: ApprovalRequest) => void;
     onQuestion?: (request: QuestionRequest) => void;
+    onWorkspace?: (snapshot: WorkspaceSnapshot) => void;
     debug: boolean;
 }
 /**

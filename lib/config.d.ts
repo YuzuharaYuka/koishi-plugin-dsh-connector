@@ -19,6 +19,12 @@ export interface Config {
     naturalLanguagePrivate: boolean;
     /** 自然语言模式的空闲窗口（分钟） */
     chatIdleMinutes: number;
+    /** 会话列表分组方式 */
+    sessionGroupBy: 'workspace' | 'flat';
+    /** 会话列表排序方式 */
+    sessionSortBy: 'manual' | 'updated';
+    /** 会话列表筛选方式 */
+    sessionFilter: 'active' | 'all' | 'archived';
     mergeForward: boolean;
     splitLength: number;
     chunkLength: number;

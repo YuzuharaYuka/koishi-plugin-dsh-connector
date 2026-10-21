@@ -21,6 +21,12 @@ export interface Config {
   naturalLanguagePrivate: boolean
   /** 自然语言模式的空闲窗口（分钟） */
   chatIdleMinutes: number
+  /** 会话列表分组方式 */
+  sessionGroupBy: 'workspace' | 'flat'
+  /** 会话列表排序方式 */
+  sessionSortBy: 'manual' | 'updated'
+  /** 会话列表筛选方式 */
+  sessionFilter: 'active' | 'all' | 'archived'
   mergeForward: boolean
   splitLength: number
   chunkLength: number
@@ -92,6 +98,25 @@ export const Config: Schema<Config> = Schema.intersect([
       .max(1440)
       .default(30)
       .description('**自然语言窗口**<br>配置开启时，最近多少分钟内交互过才直通；`0` 表示只认手动开启'),
+    sessionGroupBy: Schema.union([
+      Schema.const('workspace').description('按工作区'),
+      Schema.const('flat').description('单列表'),
+    ])
+      .default('workspace')
+      .description('**会话分组**<br>按工作区（与 DSH 一致）或单列表'),
+    sessionSortBy: Schema.union([
+      Schema.const('updated').description('最近更新'),
+      Schema.const('manual').description('手动排序'),
+    ])
+      .default('updated')
+      .description('**会话排序**<br>最近更新，或沿用 DSH 里手动排好的顺序'),
+    sessionFilter: Schema.union([
+      Schema.const('active').description('隐藏已归档'),
+      Schema.const('all').description('全部会话'),
+      Schema.const('archived').description('仅已归档'),
+    ])
+      .default('active')
+      .description('**会话筛选**<br>归档状态以 DSH 工作区为准'),
     clientTimeZone: Schema.string()
       .default('Asia/Shanghai')
       .description('**客户端时区**<br>IANA 名称，如 `Asia/Shanghai`'),
@@ -199,6 +224,12 @@ export function normalizeConfig(config: Config): Config {
     defaultWorkspace: (config.defaultWorkspace ?? '').trim(),
     naturalLanguagePrivate: config.naturalLanguagePrivate ?? false,
     chatIdleMinutes: Math.max(0, Math.min(1440, config.chatIdleMinutes ?? 30)),
+    sessionGroupBy: config.sessionGroupBy === 'flat' ? 'flat' : 'workspace',
+    sessionSortBy: config.sessionSortBy === 'manual' ? 'manual' : 'updated',
+    sessionFilter:
+      config.sessionFilter === 'all' || config.sessionFilter === 'archived'
+        ? config.sessionFilter
+        : 'active',
     clientTimeZone: (config.clientTimeZone ?? '').trim() || 'Asia/Shanghai',
     replyFormat: config.replyFormat === 'markdown' ? 'markdown' : 'text',
     allowUsers: (config.allowUsers ?? []).map((id) => String(id).trim()).filter(Boolean),

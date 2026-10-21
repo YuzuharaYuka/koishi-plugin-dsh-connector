@@ -10,7 +10,12 @@ import {
 } from '../core/auth'
 import { discoverDshPort } from '../core/discover'
 import { decodeAttachment, extractContent, fetchImage, type TurnImage } from '../core/media'
-import { EventBridge, type ApprovalRequest, type QuestionRequest } from '../core/mux'
+import {
+  EventBridge,
+  type ApprovalRequest,
+  type QuestionRequest,
+  type WorkspaceSnapshot,
+} from '../core/mux'
 import { DshRpcError, callRpc, callRpcMultipart } from '../core/rpc'
 import { logger, normalizeTimeZone, sleep } from '../utils'
 import { diffUsage, EMPTY_USAGE, type TokenUsage } from '../core/pricing'
@@ -193,6 +198,8 @@ export class DshClient {
   private readonly pending: ApprovalRequest[] = []
   private approvalHandler?: (request: ApprovalRequest) => void
   private questionHandler?: (request: QuestionRequest) => void
+  /** 工作区流的最新快照，未收到前为 undefined */
+  private workspace?: WorkspaceSnapshot
 
   constructor(private readonly config: Config) {}
 
@@ -301,6 +308,9 @@ export class DshClient {
       },
       onQuestion: (request) => {
         this.questionHandler?.(request)
+      },
+      onWorkspace: (snapshot) => {
+        this.workspace = snapshot
       },
     })
     this.bridge.start()
@@ -788,6 +798,11 @@ export class DshClient {
 
   setQuestionHandler(handler: (request: QuestionRequest) => void): void {
     this.questionHandler = handler
+  }
+
+  /** 最近一次工作区快照（分组、归档、排序用） */
+  get workspaceSnapshot(): WorkspaceSnapshot | undefined {
+    return this.workspace
   }
 
   /** 回答 agent 的提问；`callId` 用事件帧里的 eventId */

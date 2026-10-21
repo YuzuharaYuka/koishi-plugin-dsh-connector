@@ -1,6 +1,6 @@
 import type { Config } from '../config';
 import { type TurnImage } from '../core/media';
-import { type ApprovalRequest, type QuestionRequest } from '../core/mux';
+import { type ApprovalRequest, type QuestionRequest, type WorkspaceSnapshot } from '../core/mux';
 import { type TokenUsage } from '../core/pricing';
 export type ApprovalDecision = 'allow' | 'deny';
 export interface DshSessionSummary {
@@ -99,6 +99,8 @@ export declare class DshClient {
     private readonly pending;
     private approvalHandler?;
     private questionHandler?;
+    /** 工作区流的最新快照，未收到前为 undefined */
+    private workspace?;
     constructor(config: Config);
     get relayMode(): boolean;
     get connected(): boolean;
@@ -177,6 +179,8 @@ export declare class DshClient {
     private readAttachment;
     setApprovalHandler(handler: (request: ApprovalRequest) => void): void;
     setQuestionHandler(handler: (request: QuestionRequest) => void): void;
+    /** 最近一次工作区快照（分组、归档、排序用） */
+    get workspaceSnapshot(): WorkspaceSnapshot | undefined;
     /** 回答 agent 的提问；`callId` 用事件帧里的 eventId */
     answerQuestion(sessionId: string, callId: string, answers: Array<{
         id: string;

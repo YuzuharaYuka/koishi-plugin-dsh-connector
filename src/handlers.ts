@@ -275,6 +275,85 @@ export async function handlePing(deps: HandlerDeps, session: Session): Promise<s
   return lines.join('\n')
 }
 
+interface SessionGroup {
+  key: string
+  title: string
+  sessions: DshSessionSummary[]
+}
+
+/** 每个会话最近一次更新的时间，用于给分组排序 */
+function groupUpdatedAt(group: SessionGroup): number {
+  return group.sessions.reduce((max, item) => Math.max(max, item.updatedAt), 0)
+}
+
+function sortByUpdated(items: DshSessionSummary[]): DshSessionSummary[] {
+  return [...items].sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+/**
+ * 按配置把会话分组。
+ *
+ * 工作区归属以 DSH 的 `workspace/follow` 基线为准：会话必须显式列在某个
+ * 工作区的 sessionIds 里才算属于它，否则归入「未分组」——这与 DSH 界面一致，
+ * 不能拿 cwd 去猜（否则斜杠写法不同就会冒出重复的工作区）。
+ */
+function buildSessionGroups(
+  deps: HandlerDeps,
+  sessions: DshSessionSummary[],
+  filterOverride?: 'active' | 'all' | 'archived',
+): {
+  groups: SessionGroup[]
+  hidden: number
+} {
+  const snapshot = deps.client.workspaceSnapshot
+  const archived = new Set(snapshot?.archived ?? [])
+  const filter = filterOverride ?? deps.config.sessionFilter
+
+  const visible = sessions.filter((item) => {
+    const isArchived = archived.has(item.sessionId)
+    if (filter === 'archived') return isArchived
+    if (filter === 'all') return true
+    return !isArchived
+  })
+  const hidden = sessions.length - visible.length
+
+  if (deps.config.sessionGroupBy === 'flat' || !snapshot) {
+    const sorted = deps.config.sessionSortBy === 'manual' ? visible : sortByUpdated(visible)
+    return { groups: visible.length > 0 ? [{ key: '', title: '', sessions: sorted }] : [], hidden }
+  }
+
+  const byId = new Map(visible.map((item) => [item.sessionId, item]))
+  const groups: SessionGroup[] = []
+  const used = new Set<string>()
+
+  for (const workspace of snapshot.workspaces) {
+    const members: DshSessionSummary[] = []
+    for (const sessionId of workspace.sessionIds) {
+      const item = byId.get(sessionId)
+      if (!item) continue
+      members.push(item)
+      used.add(sessionId)
+    }
+    if (members.length === 0) continue
+    groups.push({
+      key: workspace.id,
+      title: workspace.title,
+      sessions: deps.config.sessionSortBy === 'manual' ? members : sortByUpdated(members),
+    })
+  }
+
+  const rest = visible.filter((item) => !used.has(item.sessionId))
+  if (rest.length > 0) {
+    groups.push({ key: 'ungrouped', title: '未分组', sessions: sortByUpdated(rest) })
+  }
+
+  // 手动排序保持 DSH 里的工作区顺序；最近更新则按组内最新会话排
+  if (deps.config.sessionSortBy !== 'manual') {
+    groups.sort((left, right) => groupUpdatedAt(right) - groupUpdatedAt(left))
+  }
+  return { groups, hidden }
+}
+
 export async function handleSessions(deps: HandlerDeps, session: Session, includeAll = false): Promise<string> {
   const all = await deps.client.listSessions({
     includeChildren: includeAll,
@@ -285,34 +364,44 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
     return MESSAGES.noSessions
   }
 
-  // 已按最后修改时间倒序；默认只取最近一批，-a 时列出全部
-  const cap = includeAll ? all.length : deps.config.sessionLimit
-  const sessions = all.slice(0, cap)
-
-  const binding = bindingOf(deps, session)
-  const groups = new Map<string, DshSessionSummary[]>()
-  for (const item of sessions) {
-    const group = item.cwd?.trim() || '默认工作区'
-    const list = groups.get(group) ?? []
-    list.push(item)
-    groups.set(group, list)
+  const { groups, hidden } = buildSessionGroups(deps, all, includeAll ? 'all' : undefined)
+  const visibleCount = groups.reduce((sum, group) => sum + group.sessions.length, 0)
+  if (visibleCount === 0) {
+    deps.listings.delete(sessionKey(session))
+    return hidden > 0 ? `没有符合筛选条件的会话（已隐藏 ${hidden} 个）。` : MESSAGES.noSessions
   }
 
-  // 编号必须和绑定时用的顺序完全一致：按分组渲染的顺序展开后再存
+  // 列表上限作用在筛选后的会话上；-a 时列出全部
+  const cap = includeAll ? visibleCount : deps.config.sessionLimit
+  let budget = cap
+  const binding = bindingOf(deps, session)
+  const archivedSet = new Set(deps.client.workspaceSnapshot?.archived ?? [])
   const ordered: DshSessionSummary[] = []
-  const header =
-    sessions.length < all.length
-      ? `会话列表（显示 ${sessions.length} / 共 ${all.length} 个）`
-      : `会话列表（共 ${sessions.length} 个）`
-  const lines = [header]
-  for (const [group, items] of groups) {
-    lines.push(`【${group}】`)
+  const lines: string[] = []
+  const effectiveFilter = includeAll ? 'all' : deps.config.sessionFilter
+  const header = [
+    `会话列表（共 ${visibleCount} 个`,
+    hidden > 0
+      ? effectiveFilter === 'archived'
+        ? '，仅已归档'
+        : `，已隐藏 ${hidden} 个归档`
+      : '',
+    '）',
+  ].join('')
+
+  for (const group of groups) {
+    if (budget <= 0) break
+    const items = group.sessions.slice(0, budget)
+    budget -= items.length
+    if (items.length === 0) continue
+    if (group.title) lines.push(`【${group.title}】`)
     for (const item of items) {
       ordered.push(item)
       const title = item.title ? truncate(item.title, 28) : '（未命名）'
       const flags = [
         item.running ? '运行中' : '',
         item.sessionId === binding?.sessionId ? '当前绑定' : '',
+        archivedSet.has(item.sessionId) ? '已归档' : '',
         item.parentSessionId ? '子会话' : '',
       ]
         .filter(Boolean)
@@ -320,12 +409,14 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
       lines.push(`${ordered.length}. ${title}${flags ? `（${flags}）` : ''}`)
     }
   }
+
   deps.listings.set(sessionKey(session), ordered)
-  if (sessions.length < all.length) {
-    lines.push(`按修改时间排序，只显示最近 ${sessions.length} 个；加 -a 查看全部。`)
+  const output = [header, ...lines]
+  if (ordered.length < visibleCount) {
+    output.push(`按当前排序只显示最近 ${ordered.length} 个；加 -a 查看全部。`)
   }
-  lines.push('用 dsh.use 序号绑定。')
-  return lines.join('\n')
+  output.push('用 dsh.use 序号绑定。')
+  return output.join('\n')
 }
 
 /** 本轮 token 用量与估算费用 */
@@ -399,24 +490,42 @@ function acceptedMessage(images: number, files: number): string {
 }
 
 export interface WorkspaceEntry {
-  cwd: string
+  title: string
+  path: string
   count: number
-  updatedAt: number
 }
 
-/** 从现有会话的 cwd 归纳出已知工作区，按最近使用排序 */
+/** 统一斜杠与大小写，避免 `D:/x` 和 `D:\x` 被当成两个目录 */
+function normalizePath(path: string): string {
+  return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
+/**
+ * 已知工作区。
+ *
+ * 优先用 DSH 的工作区基线（带标题），基线还没到时退化为按会话 cwd 归纳。
+ */
 async function listWorkspaces(deps: HandlerDeps): Promise<WorkspaceEntry[]> {
+  const snapshot = deps.client.workspaceSnapshot
+  if (snapshot) {
+    return snapshot.workspaces.map((workspace) => ({
+      title: workspace.title,
+      path: workspace.path,
+      count: workspace.sessionIds.length,
+    }))
+  }
+
   const sessions = await deps.client.listSessions()
   const map = new Map<string, WorkspaceEntry>()
   for (const item of sessions) {
     const cwd = item.cwd?.trim()
     if (!cwd) continue
-    const entry = map.get(cwd) ?? { cwd, count: 0, updatedAt: 0 }
+    const key = normalizePath(cwd)
+    const entry = map.get(key) ?? { title: cwd, path: cwd, count: 0 }
     entry.count += 1
-    entry.updatedAt = Math.max(entry.updatedAt, item.updatedAt)
-    map.set(cwd, entry)
+    map.set(key, entry)
   }
-  return [...map.values()].sort((left, right) => right.updatedAt - left.updatedAt)
+  return [...map.values()]
 }
 
 function expandHome(path: string): string {
@@ -431,7 +540,7 @@ async function resolveWorkspace(deps: HandlerDeps, target?: string): Promise<str
   if (!value) return deps.config.defaultWorkspace || undefined
   if (/^\d+$/.test(value)) {
     const list = await listWorkspaces(deps)
-    return list[Number(value) - 1]?.cwd
+    return list[Number(value) - 1]?.path
   }
   return expandHome(value)
 }
@@ -460,8 +569,10 @@ export async function handleWorkspaces(deps: HandlerDeps): Promise<string> {
   if (list.length === 0) return MESSAGES.noWorkspace
   const lines = ['已知工作区']
   list.forEach((entry, index) => {
-    const flag = entry.cwd === deps.config.defaultWorkspace ? '（默认）' : ''
-    lines.push(`${index + 1}. ${entry.cwd}（${entry.count} 个会话）${flag}`)
+    const flag = normalizePath(entry.path) === normalizePath(deps.config.defaultWorkspace)
+      ? '（默认）'
+      : ''
+    lines.push(`${index + 1}. ${entry.title}（${entry.path}，${entry.count} 个会话）${flag}`)
   })
   lines.push('用 dsh.new 序号 在该工作区新建，或 dsh.new 加绝对路径。')
   return lines.join('\n')

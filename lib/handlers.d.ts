@@ -47,9 +47,9 @@ export declare function handleSessions(deps: HandlerDeps, session: Session, incl
 /** 查看账户余额 */
 export declare function handleBalance(deps: HandlerDeps): Promise<string>;
 export interface WorkspaceEntry {
-    cwd: string;
+    title: string;
+    path: string;
     count: number;
-    updatedAt: number;
 }
 /**
  * 新建会话。

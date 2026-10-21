@@ -35,13 +35,63 @@ export interface QuestionRequest {
   raw: WaterfallFrame
 }
 
+export interface WorkspaceInfo {
+  id: string
+  path: string
+  title: string
+  sessionIds: string[]
+}
+
+/** DSH 的工作区基线：工作区成员关系、归档与置顶会话 */
+export interface WorkspaceSnapshot {
+  workspaces: WorkspaceInfo[]
+  archived: string[]
+  pinned: string[]
+}
+
 export interface EventBridgeOptions {
   wsUrl: string
   baseUrl: string
   getCookie: () => Promise<string>
   onApproval: (request: ApprovalRequest) => void
   onQuestion?: (request: QuestionRequest) => void
+  onWorkspace?: (snapshot: WorkspaceSnapshot) => void
   debug: boolean
+}
+
+const EVENTS_STREAM = 'koishi-plugin-dsh'
+const WORKSPACE_STREAM = 'koishi-plugin-dsh-workspace'
+
+function readWorkspaceSnapshot(value: Record<string, unknown>): WorkspaceSnapshot | null {
+  const payload = (value.value ?? value) as Record<string, unknown>
+  const items = payload.items
+  if (!Array.isArray(items)) return null
+
+  const workspaces: WorkspaceInfo[] = []
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const id = pickString(record, ['workspaceId', 'id'])
+    const path = pickString(record, ['path'])
+    if (!id || !path) continue
+    workspaces.push({
+      id,
+      path,
+      title: pickString(record, ['title', 'name']) ?? path,
+      sessionIds: (Array.isArray(record.sessionIds) ? record.sessionIds : []).filter(
+        (sessionId): sessionId is string => typeof sessionId === 'string',
+      ),
+    })
+  }
+
+  const toIds = (input: unknown): string[] =>
+    (Array.isArray(input) ? input : []).filter((id): id is string => typeof id === 'string')
+
+  return {
+    workspaces,
+    archived: toIds(payload.archivedSessionIds),
+    pinned: toIds(payload.pinnedSessionIds),
+  }
 }
 
 const RECONNECT_MIN_MS = 2000
@@ -222,8 +272,15 @@ export class EventBridge {
     socket.on('open', () => {
       socket.send(JSON.stringify({
         type: 'open',
-        streamId: 'koishi-plugin-dsh',
+        streamId: EVENTS_STREAM,
         endpoint: '$events',
+        payload: { args: {} },
+      }))
+      // 工作区基线：分组、归档与排序都以它为准
+      socket.send(JSON.stringify({
+        type: 'open',
+        streamId: WORKSPACE_STREAM,
+        endpoint: 'workspace/follow',
         payload: { args: {} },
       }))
       this.delay = RECONNECT_MIN_MS
@@ -259,6 +316,18 @@ export class EventBridge {
     const value = frame.value
     if (!value || typeof value !== 'object' || Array.isArray(value)) return
     const payload = value as WaterfallFrame
+
+    // 工作区流：基线（以及后续整包替换）直接覆盖本地快照
+    if (frame.streamId === WORKSPACE_STREAM) {
+      const type = payload.type
+      if (type === 'baseline' || type === 'replace') {
+        const snapshot = readWorkspaceSnapshot(payload)
+        if (snapshot) this.options.onWorkspace?.(snapshot)
+      } else if (this.options.debug) {
+        logger.debug(`[mux] 未处理的工作区帧: ${text.slice(0, 300)}`)
+      }
+      return
+    }
 
     if (payload.type === 'ready') {
       const clientId = typeof payload.clientId === 'string' ? payload.clientId : ''

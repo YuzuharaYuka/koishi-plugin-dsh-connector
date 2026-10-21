@@ -100,8 +100,11 @@ export function registerCommands(deps: HandlerDeps, config: Config): void {
 
   ctx.command('dsh.sessions', '列出 DSH 会话')
     .alias('dsh会话')
-    .option('all', '-a 包含子会话与空白会话')
-    .usage('按工作目录分组并编号，回复 dsh.use 加序号即可绑定。\n默认隐藏子代理会话与从未使用过的空会话。')
+    .option('all', '-a 包含子会话、空白会话与已归档会话')
+    .usage(
+      '按 DSH 里的工作区分组，组名就是工作区名；不在任何工作区的会话归入「未分组」。\n' +
+      '分组、排序与归档筛选由配置项 sessionGroupBy / sessionSortBy / sessionFilter 控制；-a 强制显示全部。',
+    )
     .example('dsh.sessions')
     .example('dsh.sessions -a')
     .action(({ session, options }) => action(session, (session) => handleSessions(deps, session, options?.all ?? false)))

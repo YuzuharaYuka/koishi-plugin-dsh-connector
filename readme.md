@@ -13,7 +13,7 @@ npm i koishi-plugin-dsh-connector
 | 指令 | 说明 |
 | :--- | :--- |
 | `dsh.ping` | 连接状态、工作区、模型、权限与任务状态 |
-| `dsh.sessions` | 会话列表，`-a` 显示全部 |
+| `dsh.sessions` | 会话列表，按 DSH 工作区分组，`-a` 显示全部 |
 | `dsh.new [目录/序号]` | 新建并绑定会话，可指定工作区 |
 | `dsh.workspaces` | 列出已知工作区 |
 | `dsh.use 序号` | 按序号或会话 ID 绑定 |
@@ -33,6 +33,7 @@ npm i koishi-plugin-dsh-connector
 
 - 每个聊天独立绑定会话，未绑定时 `dsh.run` 会自动新建。
 - `dsh.sessions` 默认列最近 20 个，按修改时间倒序；`-a` 列出全部。
+- 会话的分组、排序、筛选与 DSH 界面一致：组名是 DSH 里的工作区名，归档状态取自工作区基线；不在任何工作区的会话归入「未分组」。
 - `dsh.new` 不带参数时使用配置项 `defaultWorkspace`，也可给序号或绝对路径。
 - 思考等级为 `off` / `low` / `high` / `max`，切换模型时未指定等级会沿用当前值。
 - `dsh.run` 会提交消息附带的图片和文件，回复里的图片也会回传；长回复自动分段或合并转发。
@@ -55,6 +56,9 @@ npm i koishi-plugin-dsh-connector
 | `promptTimeout` | `600` | 单轮任务等待上限（秒） |
 | `historyLimit` | `5` | `dsh.history` 默认回放条数 |
 | `sessionLimit` | `20` | `dsh.sessions` 默认显示条数 |
+| `sessionGroupBy` | `workspace` | 分组方式：`workspace` 按工作区 / `flat` 单列表 |
+| `sessionSortBy` | `updated` | 排序方式：`updated` 最近更新 / `manual` 手动排序 |
+| `sessionFilter` | `active` | 筛选方式：`active` 隐藏已归档 / `all` 全部 / `archived` 仅已归档 |
 | `defaultWorkspace` | 空 | `dsh.new` 不带参数时使用的工作区 |
 | `naturalLanguagePrivate` | `false` | 私聊里不带前缀的消息直接交给 DSH |
 | `chatIdleMinutes` | `30` | 自然语言窗口：最近多少分钟内交互过才直通 |
