@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-dsh-connector",
   "description": "在聊天平台远程控制 DeepSeek Harness 会话：下发任务、查看历史、切换权限、处理授权",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -31,9 +31,16 @@
     "qq"
   ],
   "dependencies": {
+    "marked": "^15.0.12",
     "ws": "^8.18.0"
   },
   "peerDependencies": {
-    "koishi": "^4.18.7"
+    "koishi": "^4.18.7",
+    "koishi-plugin-puppeteer": "^3.9.0"
+  },
+  "peerDependenciesMeta": {
+    "koishi-plugin-puppeteer": {
+      "optional": true
+    }
   }
 }

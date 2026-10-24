@@ -264,6 +264,9 @@ export class EventBridge {
     this.socket = undefined
     if (!socket) return
     socket.removeAllListeners()
+    // 关闭过程中 ws 仍可能补发 error（尤其是握手未完成时 terminate），
+    // 移除监听后必须兜一个空处理，否则会变成 unhandled 'error' 中断进程
+    socket.on('error', () => {})
     // 握手还没完成时 close() 会抛错，这种情况直接终止连接
     if (socket.readyState === WebSocket.CONNECTING) socket.terminate()
     else socket.close()

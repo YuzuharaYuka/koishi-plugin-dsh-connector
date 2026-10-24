@@ -8,6 +8,8 @@ npm i koishi-plugin-dsh-connector
 
 需要 Koishi 4.18 及以上，且 DSH 网页服务正在运行；两者建议以同一系统用户运行，否则配置 `dshHome`。
 
+回复可以转成图片渲染，这需要额外安装 `koishi-plugin-puppeteer`；没装时自动回退纯文本。
+
 > 配置页右侧有可拖动的悬浮导航，点击分组名即可跳转；readme 的配置表也按同一顺序分组。
 
 [指令](#指令) · [配置](#配置) · [说明](#说明) · [License](#license)
@@ -61,10 +63,18 @@ npm i koishi-plugin-dsh-connector
 
 | 配置项 | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `replyFormat` | `text` | `text` 转纯文本 / `markdown` 保留原文 |
+| `replyFormat` | `text` | `text` 转纯文本 / `markdown` 保留原文 / `image` 转图片 |
 | `splitLength` | `1500` | 超过该字数才分段，`0` 表示始终 |
 | `chunkLength` | `1500` | 每段与每个转发节点的最大字数 |
 | `mergeForward` | `false` | 长回复合并转发，仅 OneBot |
+
+### 图片回复
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `imageTheme` | `dark` | `dark` 深色 / `light` 浅色，与 DSH 界面一致 |
+| `imageMaxWidth` | `720` | 正文宽度（像素），`720` 适合手机 |
+| `imageMinLength` | `200` | 更短的回复仍发文本，`0` 表示都转图片 |
 
 ### 交互
 
@@ -117,6 +127,7 @@ npm i koishi-plugin-dsh-connector
 - **超时**：等待超时后任务不会丢，后台继续跟踪并把结果补发到原聊天。
 - **自然语言**：`dsh.chat on` 后私聊里的普通消息直接交给 DSH；配置项 `naturalLanguagePrivate` 需要最近有过交互才生效。
 - **用量**：DSH 没有花费接口，`showCost` 按官方价目表（区分缓存命中与高峰时段）估算，仅供参考。
+- **回复格式**：纯文本用 marked 解析后重排（标题、列表、表格、引用、代码块都保留结构）；图片按 DSH 的配色与字号渲染，过短或过长的回复会自动回退文本。
 - **断线与重连**：DSH 关闭时事件桥按 2 秒到 5 分钟的退避重试；空闲且连续失败 5 次后暂停（日志只在首次和每 5 分钟记一条），下一次任何指令会自动唤醒。
 
 ## License

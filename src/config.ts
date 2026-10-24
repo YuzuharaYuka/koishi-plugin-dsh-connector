@@ -11,7 +11,13 @@ export interface Config {
   historyLimit: number
   sessionLimit: number
   clientTimeZone: string
-  replyFormat: 'text' | 'markdown'
+  replyFormat: 'text' | 'markdown' | 'image'
+  /** 图片回复的配色 */
+  imageTheme: 'dark' | 'light'
+  /** 图片正文宽度（CSS 像素） */
+  imageMaxWidth: number
+  /** 转换后的文本短于该字数时仍发文本 */
+  imageMinLength: number
   allowUsers: string[]
   /** 新建会话后自动切换到的权限预设；空串表示沿用 DSH 默认 */
   defaultPermission: string
@@ -99,9 +105,10 @@ export const Config: Schema<Config> = Schema.intersect([
     replyFormat: Schema.union([
       Schema.const('text').description('纯文本'),
       Schema.const('markdown').description('保留 Markdown'),
+      Schema.const('image').description('转成图片'),
     ])
       .default('text')
-      .description('**回复格式**<br>QQ 默认转纯文本'),
+      .description('**回复格式**<br>`image` 需要 `koishi-plugin-puppeteer`'),
     splitLength: Schema.natural()
       .min(0)
       .max(5000)
@@ -118,6 +125,27 @@ export const Config: Schema<Config> = Schema.intersect([
       .default(false)
       .description('**合并转发**<br>长回复打包成一条，仅 OneBot'),
   }).description('回复'),
+
+  Schema.object({
+    imageTheme: Schema.union([
+      Schema.const('dark').description('深色'),
+      Schema.const('light').description('浅色'),
+    ])
+      .default('dark')
+      .description('**配色**<br>与 DSH 界面一致'),
+    imageMaxWidth: Schema.natural()
+      .min(320)
+      .max(1024)
+      .step(20)
+      .default(720)
+      .description('**正文宽度**<br>单位像素，`720` 适合手机'),
+    imageMinLength: Schema.natural()
+      .min(0)
+      .max(5000)
+      .step(50)
+      .default(200)
+      .description('**图片阈值**<br>更短的回复仍发文本；`0` 表示都转图片'),
+  }).description('图片回复'),
 
   Schema.object({
     naturalLanguagePrivate: Schema.boolean()
@@ -230,7 +258,11 @@ export function normalizeConfig(config: Config): Config {
         ? config.sessionFilter
         : 'active',
     clientTimeZone: (config.clientTimeZone ?? '').trim() || 'Asia/Shanghai',
-    replyFormat: config.replyFormat === 'markdown' ? 'markdown' : 'text',
+    replyFormat:
+      config.replyFormat === 'markdown' || config.replyFormat === 'image' ? config.replyFormat : 'text',
+    imageTheme: config.imageTheme === 'light' ? 'light' : 'dark',
+    imageMaxWidth: Math.max(320, Math.min(1024, config.imageMaxWidth ?? 720)),
+    imageMinLength: Math.max(0, Math.min(5000, config.imageMinLength ?? 200)),
     allowUsers: (config.allowUsers ?? []).map((id) => String(id).trim()).filter(Boolean),
     defaultPermission: PERMISSION_PRESETS.includes(config.defaultPermission ?? '')
       ? config.defaultPermission

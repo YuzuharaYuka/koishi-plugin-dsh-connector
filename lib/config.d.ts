@@ -9,7 +9,13 @@ export interface Config {
     historyLimit: number;
     sessionLimit: number;
     clientTimeZone: string;
-    replyFormat: 'text' | 'markdown';
+    replyFormat: 'text' | 'markdown' | 'image';
+    /** 图片回复的配色 */
+    imageTheme: 'dark' | 'light';
+    /** 图片正文宽度（CSS 像素） */
+    imageMaxWidth: number;
+    /** 转换后的文本短于该字数时仍发文本 */
+    imageMinLength: number;
     allowUsers: string[];
     /** 新建会话后自动切换到的权限预设；空串表示沿用 DSH 默认 */
     defaultPermission: string;

@@ -6,6 +6,7 @@ import { h, type Context, type Session } from 'koishi'
 import type { Config } from './config'
 import { FORWARD_PLATFORMS, MESSAGES, effortLabel, presetLabel } from './constants'
 import { toPlainText, stripChatMarkup } from './core/markdown'
+import { puppeteerOf, renderMarkdownImage } from './core/render'
 import { loadFileSource, loadImageSource, sanitizeFileName, type TurnImage } from './core/media'
 import { estimateCost, formatCost, formatNumber, totalTokens } from './core/pricing'
 import type { QuestionItem } from './core/mux'
@@ -124,6 +125,47 @@ export function renderReply(config: Config, text: string): string {
   const trimmed = text.trim()
   if (!trimmed) return ''
   return config.replyFormat === 'text' ? toPlainText(trimmed) : trimmed
+}
+
+interface RenderedAnswer {
+  /** 直接发文本时使用；图片模式下作为渲染失败的后备 */
+  text: string
+  image?: ReturnType<typeof h.image>
+}
+
+let warnedMissingPuppeteer = false
+
+/**
+ * 按配置产出最终回复：纯文本、保留 Markdown，或渲染成图片。
+ *
+ * 图片是可选能力：没装 puppeteer、浏览器起不来、体积超限都静默回退文本，
+ * 不能让「想要图片」变成「什么都不发」。
+ */
+async function renderAnswer(deps: HandlerDeps, markdown: string): Promise<RenderedAnswer> {
+  const text = renderReply(deps.config, markdown)
+  if (!text) return { text: '' }
+  if (deps.config.replyFormat !== 'image') return { text }
+  if (text.length < deps.config.imageMinLength) return { text }
+
+  if (!puppeteerOf(deps.ctx)) {
+    if (!warnedMissingPuppeteer) {
+      warnedMissingPuppeteer = true
+      logger.warn('[reply] 已选择图片回复，但未启用 koishi-plugin-puppeteer，暂时回退文本')
+    }
+    return { text }
+  }
+
+  try {
+    const buffer = await renderMarkdownImage(deps.ctx, markdown, deps.config)
+    if (!buffer) {
+      logger.warn('[reply] 图片渲染结果为空或超出体积上限，回退文本')
+      return { text }
+    }
+    return { text, image: h.image(buffer, 'image/png') }
+  } catch (error) {
+    logger.warn(`[reply] 图片渲染失败，回退文本: ${getErrorMessage(error)}`)
+    return { text }
+  }
 }
 
 /**
@@ -635,16 +677,22 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
       // 回合结束，任何还挂着的提问都已失效（可能在 Web 界面答过）
       deps.questions.delete(key)
       const parts: (string | ReturnType<typeof h.image>)[] = []
-      const output = renderReply(deps.config, result.text)
-      const chunks = output ? splitText(output, deps.config.chunkLength) : []
-      const wantForward = deps.config.mergeForward && FORWARD_PLATFORMS.includes(session.platform)
-      // splitLength 为 0 时始终按长消息路径处理（短回复只有一段，仍与图片合并发送）
-      const alwaysHandle = deps.config.splitLength === 0
-      const tooLong = output.length > 0 && (alwaysHandle || output.length > deps.config.splitLength)
-      const longPath = tooLong && (wantForward || chunks.length > 1)
+      const answer = await renderAnswer(deps, result.text)
+      let longPath = false
 
-      if (longPath) await sendLongText(deps, session, chunks, wantForward)
-      else if (output) parts.push(output)
+      if (answer.image) {
+        // 图片模式下正文已经画进图里，不再重复发一份文本
+        parts.push(answer.image)
+      } else if (answer.text) {
+        const chunks = splitText(answer.text, deps.config.chunkLength)
+        const wantForward = deps.config.mergeForward && FORWARD_PLATFORMS.includes(session.platform)
+        // splitLength 为 0 时始终按长消息路径处理（短回复只有一段，仍与图片合并发送）
+        const alwaysHandle = deps.config.splitLength === 0
+        const tooLong = alwaysHandle || answer.text.length > deps.config.splitLength
+        longPath = tooLong && (wantForward || chunks.length > 1)
+        if (longPath) await sendLongText(deps, session, chunks, wantForward)
+        else parts.push(answer.text)
+      }
 
       for (const image of result.images) parts.push(h.image(image.buffer, image.type))
       if (result.skipped > 0) parts.push(MESSAGES.imagesSkipped(result.skipped))
@@ -1119,8 +1167,10 @@ function scheduleDeferredDelivery(
   void (async () => {
     try {
       const result = await deps.client.awaitTurn(sessionId, baseline, DEFERRED_TIMEOUT_MS)
-      const output = renderReply(deps.config, result.text)
-      if (output) await session.send(output)
+      if (!result.text.trim()) return
+      const answer = await renderAnswer(deps, result.text)
+      if (answer.image) await session.send(answer.image)
+      else if (answer.text) await session.send(answer.text)
     } catch (error) {
       logger.debug(`[defer] 补发失败: ${getErrorMessage(error)}`)
     } finally {
