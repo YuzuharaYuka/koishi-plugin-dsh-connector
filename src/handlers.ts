@@ -8,6 +8,7 @@ import { FORWARD_PLATFORMS, MESSAGES, effortLabel, presetLabel } from './constan
 import { toPlainText, stripChatMarkup } from './core/markdown'
 import { puppeteerOf, renderMarkdownImage } from './core/render'
 import { loadFileSource, loadImageSource, sanitizeFileName, type TurnImage } from './core/media'
+import type { TokenUsage } from './core/pricing'
 import { estimateCost, formatCost, formatNumber, totalTokens } from './core/pricing'
 import type { QuestionItem } from './core/mux'
 import { splitText } from './core/text'
@@ -190,6 +191,68 @@ async function sendLongText(
     }
   }
   for (const chunk of chunks) await session.send(chunk)
+}
+
+/**
+ * 把一轮结果按当前回复设置投递出去。
+ *
+ * 图片模式：图片单独成一条，用量与余额提示作为另一条消息交给调用方发送，
+ * 免得平台把图和文字拼进同一条消息。
+ * 文本模式：长回复按 splitLength / chunkLength 分段或合并转发；短回复、
+ * 附带回的图片、用量与提示合并成一条。
+ */
+/** 投递所需的最小结果集：超时补发没有用量快照，用量字段可选 */
+interface DeliverableTurn {
+  text: string
+  images: TurnImage[]
+  skipped: number
+  usage?: TokenUsage
+  model?: string
+}
+
+/** 供测试直接驱动投递分支 */
+export async function deliverTurnResult(
+  deps: HandlerDeps,
+  session: Session,
+  result: DeliverableTurn,
+): Promise<{ parts: (string | ReturnType<typeof h.image>)[]; sent: boolean }> {
+  const answer = await renderAnswer(deps, result.text)
+  const usage = usageText(deps.config, result)
+  const notice = await balanceNotice(deps)
+
+  if (answer.image) {
+    const media: (string | ReturnType<typeof h.image>)[] = [answer.image]
+    for (const image of result.images) media.push(h.image(image.buffer, image.type))
+    if (result.skipped > 0) media.push(MESSAGES.imagesSkipped(result.skipped))
+    await session.send(media)
+
+    const tail: string[] = []
+    if (usage) tail.push(usage)
+    if (notice) tail.push(notice)
+    return { parts: tail, sent: true }
+  }
+
+  const parts: (string | ReturnType<typeof h.image>)[] = []
+  let longPath = false
+
+  if (answer.text) {
+    const chunks = splitText(answer.text, deps.config.chunkLength)
+    const wantForward = deps.config.mergeForward && FORWARD_PLATFORMS.includes(session.platform)
+    // splitLength 为 0 时始终按长消息路径处理（短回复只有一段，仍与图片合并发送）
+    const alwaysHandle = deps.config.splitLength === 0
+    const tooLong = alwaysHandle || answer.text.length > deps.config.splitLength
+    longPath = tooLong && (wantForward || chunks.length > 1)
+    if (longPath) await sendLongText(deps, session, chunks, wantForward)
+    else parts.push(answer.text)
+  }
+
+  for (const image of result.images) parts.push(h.image(image.buffer, image.type))
+  if (result.skipped > 0) parts.push(MESSAGES.imagesSkipped(result.skipped))
+
+  if (usage) parts.push(parts.length > 0 ? `\n\n${usage}` : usage)
+  if (notice) parts.push(parts.length > 0 ? `\n${notice}` : notice)
+
+  return { parts, sent: longPath }
 }
 
 /**
@@ -462,10 +525,13 @@ export async function handleSessions(deps: HandlerDeps, session: Session, includ
 }
 
 /** 本轮 token 用量与估算费用 */
-function usageText(config: Config, result: TurnResult): string | undefined {
+function usageText(
+  config: Config,
+  result: { usage?: TokenUsage; model?: string },
+): string | undefined {
   if (!config.showUsage) return undefined
   const usage = result.usage
-  if (totalTokens(usage) === 0) return undefined
+  if (!usage || totalTokens(usage) === 0) return undefined
 
   const input = usage.uncachedInputTokens + usage.cacheWriteTokens
   const segments = [
@@ -676,35 +742,9 @@ export async function handleRun(deps: HandlerDeps, session: Session, text: strin
       const result = await deps.client.runTurn(binding.sessionId, input, images, files)
       // 回合结束，任何还挂着的提问都已失效（可能在 Web 界面答过）
       deps.questions.delete(key)
-      const parts: (string | ReturnType<typeof h.image>)[] = []
-      const answer = await renderAnswer(deps, result.text)
-      let longPath = false
-
-      if (answer.image) {
-        // 图片模式下正文已经画进图里，不再重复发一份文本
-        parts.push(answer.image)
-      } else if (answer.text) {
-        const chunks = splitText(answer.text, deps.config.chunkLength)
-        const wantForward = deps.config.mergeForward && FORWARD_PLATFORMS.includes(session.platform)
-        // splitLength 为 0 时始终按长消息路径处理（短回复只有一段，仍与图片合并发送）
-        const alwaysHandle = deps.config.splitLength === 0
-        const tooLong = alwaysHandle || answer.text.length > deps.config.splitLength
-        longPath = tooLong && (wantForward || chunks.length > 1)
-        if (longPath) await sendLongText(deps, session, chunks, wantForward)
-        else parts.push(answer.text)
-      }
-
-      for (const image of result.images) parts.push(h.image(image.buffer, image.type))
-      if (result.skipped > 0) parts.push(MESSAGES.imagesSkipped(result.skipped))
-
-      const usage = usageText(deps.config, result)
-      if (usage) parts.push(parts.length > 0 ? `\n\n${usage}` : usage)
-
-      const notice = await balanceNotice(deps)
-      if (notice) parts.push(parts.length > 0 ? `\n${notice}` : notice)
-
-      if (parts.length === 0) return longPath ? '' : MESSAGES.noContent
-      return parts
+      const delivered = await deliverTurnResult(deps, session, result)
+      if (delivered.parts.length === 0) return delivered.sent ? '' : MESSAGES.noContent
+      return delivered.parts
     } catch (error) {
       if (error instanceof DshTurnTimeout) {
         const partial = renderReply(deps.config, error.partial)
@@ -1167,10 +1207,10 @@ function scheduleDeferredDelivery(
   void (async () => {
     try {
       const result = await deps.client.awaitTurn(sessionId, baseline, DEFERRED_TIMEOUT_MS)
-      if (!result.text.trim()) return
-      const answer = await renderAnswer(deps, result.text)
-      if (answer.image) await session.send(answer.image)
-      else if (answer.text) await session.send(answer.text)
+      if (!result.text.trim() && result.images.length === 0) return
+      // 和正常回复走同一条投递路径：图片、分段、合并转发、用量都按当前配置
+      const delivered = await deliverTurnResult(deps, session, result)
+      if (delivered.parts.length > 0) await session.send(delivered.parts)
     } catch (error) {
       logger.debug(`[defer] 补发失败: ${getErrorMessage(error)}`)
     } finally {

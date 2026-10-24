@@ -1,5 +1,7 @@
 import { h, type Context, type Session } from 'koishi';
 import type { Config } from './config';
+import { type TurnImage } from './core/media';
+import type { TokenUsage } from './core/pricing';
 import type { QuestionItem } from './core/mux';
 import { type ApprovalDecision, type DshClient, type DshSessionSummary } from './services/dsh';
 import { type BindingStore } from './services/store';
@@ -42,6 +44,27 @@ export declare function shortSessionId(sessionId: string): string;
 export declare function handleWhoami(deps: HandlerDeps, session: Session): string;
 /** QQ 不渲染 Markdown，按配置转成纯文本 */
 export declare function renderReply(config: Config, text: string): string;
+/**
+ * 把一轮结果按当前回复设置投递出去。
+ *
+ * 图片模式：图片单独成一条，用量与余额提示作为另一条消息交给调用方发送，
+ * 免得平台把图和文字拼进同一条消息。
+ * 文本模式：长回复按 splitLength / chunkLength 分段或合并转发；短回复、
+ * 附带回的图片、用量与提示合并成一条。
+ */
+/** 投递所需的最小结果集：超时补发没有用量快照，用量字段可选 */
+interface DeliverableTurn {
+    text: string;
+    images: TurnImage[];
+    skipped: number;
+    usage?: TokenUsage;
+    model?: string;
+}
+/** 供测试直接驱动投递分支 */
+export declare function deliverTurnResult(deps: HandlerDeps, session: Session, result: DeliverableTurn): Promise<{
+    parts: (string | ReturnType<typeof h.image>)[];
+    sent: boolean;
+}>;
 export declare function handlePing(deps: HandlerDeps, session: Session): Promise<string>;
 export declare function handleSessions(deps: HandlerDeps, session: Session, includeAll?: boolean): Promise<string>;
 /** 查看账户余额 */
@@ -102,3 +125,4 @@ export declare function touchSession(deps: HandlerDeps, session: Session): void;
 /** 私聊里是否该把这句普通消息直接当作指令 */
 export declare function shouldRunNaturalLanguage(deps: HandlerDeps, session: Session): boolean;
 export declare function handleChatMode(deps: HandlerDeps, session: Session, action?: string): string;
+export {};

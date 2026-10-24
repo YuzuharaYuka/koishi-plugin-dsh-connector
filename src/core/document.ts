@@ -4,7 +4,8 @@
  * 颜色、字号与间距对齐 DSH 自己的 Markdown 样式（`_markdown_1ypvv_5` 那套规则），
  * 让聊天里收到的图片和 Web 界面看到的是同一个东西。只依赖系统字体，不引外链。
  */
-import { marked, type MarkedOptions } from 'marked'
+import katex from 'katex'
+import { Marked, type MarkedOptions, type TokenizerAndRendererExtension } from 'marked'
 
 export type ImageTheme = 'dark' | 'light'
 
@@ -92,6 +93,63 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * 公式交给 KaTeX 转成 MathML：不依赖 KaTeX 的 CSS 和字体文件，
+ * Chrome 原生就能排版，截图不会缺字。解析失败时退回原文。
+ */
+function renderMath(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, {
+      output: 'mathml',
+      displayMode,
+      throwOnError: false,
+      strict: 'ignore',
+      trust: false,
+    })
+  } catch {
+    return `<code>${escapeHtml(displayMode ? `$$${tex}$$` : `$${tex}$`)}</code>`
+  }
+}
+
+const mathBlock: TokenizerAndRendererExtension = {
+  name: 'mathBlock',
+  level: 'block',
+  start(src) {
+    const index = src.search(/\$\$/)
+    return index < 0 ? undefined : index
+  },
+  tokenizer(src) {
+    const match = /^\$\$[ \t]*\n?([\s\S]+?)\n?\$\$[ \t]*(?:\n+|$)/.exec(src)
+    if (!match) return undefined
+    return { type: 'mathBlock', raw: match[0], text: match[1].trim() }
+  },
+  renderer(token) {
+    return `<div class="math-block">${renderMath(String(token.text), true)}</div>`
+  },
+}
+
+const mathInline: TokenizerAndRendererExtension = {
+  name: 'mathInline',
+  level: 'inline',
+  start(src) {
+    const index = src.search(/\$(?!\$)/)
+    return index < 0 ? undefined : index
+  },
+  tokenizer(src) {
+    const block = /^\$\$([^\n$]+?)\$\$/.exec(src)
+    if (block) return { type: 'mathInline', raw: block[0], text: block[1].trim() }
+    const match = /^\$([^\n$]+)\$/.exec(src)
+    if (!match) return undefined
+    const text = match[1]
+    // 货币符号或前后带空白的片段不当公式，避免把普通文本吃掉
+    if (!text.trim() || /^\s|\s$/.test(text)) return undefined
+    return { type: 'mathInline', raw: match[0], text }
+  },
+  renderer(token) {
+    return `<span class="math-inline">${renderMath(String(token.text), false)}</span>`
+  },
+}
+
+/**
  * 截图前把不该进渲染流程的东西摘掉：
  * 脚本、内嵌样式、事件属性、iframe 一类会加载外部资源的标签。
  */
@@ -127,6 +185,10 @@ function decorateTaskItems(html: string): string {
   return html.replace(/<li>(?=<input[^>]*type="checkbox")/g, '<li class="task-list-item">')
 }
 
+/** 只给本插件用的解析器：全局 marked 可能被别的插件改过规则 */
+const parser = new Marked()
+parser.use({ extensions: [mathBlock, mathInline] })
+
 function renderMarkdown(markdown: string): string {
   const source = markdown.replace(/\r\n?/g, '\n').trim()
   if (!source) return ''
@@ -134,7 +196,7 @@ function renderMarkdown(markdown: string): string {
   const options: MarkedOptions = { gfm: true, breaks: false, async: false }
   let html: string
   try {
-    html = marked.parse(source, options) as string
+    html = parser.parse(source, options) as string
   } catch {
     html = `<p>${escapeHtml(source)}</p>`
   }
@@ -250,6 +312,9 @@ body {
 .markdown th:last-child, .markdown td:last-child { padding-right: 0; }
 .markdown img { display: block; max-width: 100%; border-radius: 8px; }
 .markdown .media-placeholder { color: ${palette.muted}; }
+.markdown .math-block { margin: 16px 0; text-align: center; overflow-x: auto; overflow-y: hidden; }
+.markdown .math-block math { margin: 0 auto; }
+.markdown .math-inline math { vertical-align: -0.15em; }
 .markdown input[type='checkbox'] { margin: 0 8px 0 0; vertical-align: -1px; }
 `
 }
