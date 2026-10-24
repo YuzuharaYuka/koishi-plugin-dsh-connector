@@ -22,16 +22,22 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { label: '连接', header: '连接' },
       { label: '会话', header: '会话' },
+    ],
+  },
+  {
+    title: '消息',
+    items: [
       { label: '回复', header: '回复' },
-      { label: '交互', header: '交互' },
+      { label: '图片', header: '图片' },
+      { label: '用量', header: '用量' },
     ],
   },
   {
     title: '其他',
     items: [
+      { label: '交互', header: '交互' },
       { label: '权限', header: '权限' },
       { label: '附件', header: '附件' },
-      { label: '用量', header: '用量' },
       { label: '调试', header: '调试' },
     ],
   },

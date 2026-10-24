@@ -1,7 +1,8 @@
 /**
- * 用 Koishi 的 puppeteer 服务把 Markdown 渲染成图片。
+ * 用 puppeteer 服务把 Markdown 渲染成图片。
  *
- * 不直接依赖 puppeteer：`koishi-plugin-puppeteer` 是可选的，没装时调用方回退纯文本。
+ * 只依赖服务本身，不绑定具体插件：任何提供 puppeteer 服务的插件都可以；
+ * 没有该服务时调用方回退纯文本。
  */
 import type { Context } from 'koishi'
 import type { Config } from '../config'

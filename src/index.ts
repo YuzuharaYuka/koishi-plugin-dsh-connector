@@ -19,6 +19,9 @@ import { getErrorMessage, debugLog, logger } from './utils'
 export * from './config'
 export const name = PLUGIN_NAME
 
+/** puppeteer 是可选服务：有就渲染图片，没有就回退文本；不绑定具体插件 */
+export const inject = { optional: ['puppeteer'] }
+
 export const usage = `
 通过聊天平台控制同一台主机上运行的 DeepSeek Harness 会话。
 
@@ -44,9 +47,7 @@ export const usage = `
 | \`dsh.approve\` / \`dsh.deny\` | \`dsh允许\` / \`dsh拒绝\` | 处理授权 |
 | \`dsh.whoami\` | \`dsh我是谁\` | 查看自己的标识 |
 
-**回复格式**：\`replyFormat\` 选 \`text\` 把 Markdown 重排成纯文本，选 \`image\` 渲染成 DSH 配色的图片（需要 \`koishi-plugin-puppeteer\`，没装时自动回退文本）。公式用 KaTeX 转 MathML，深浅配色都能正常显示；图片模式下用量与余额提示单独成一条消息。
-
-**权限**：只认用户白名单，写 \`平台:用户ID\`（如 \`onebot:123456\`）。名单内用户在私聊和群聊都能用；白名单为空时所有指令都会被拒绝（\`dsh.whoami\` 除外，用于取自己的标识）。
+**权限**：只认用户白名单，写 \`平台:用户ID\`（如 \`onebot:123456\`），名单内用户私聊群聊都能用；白名单为空时所有指令都会被拒绝（\`dsh.whoami\` 除外，用于取自己的标识）。
 
 **风险提示**：DSH 会话可执行本机命令、写入文件，被放行的用户等于拥有本机权限，请谨慎添加。
 `

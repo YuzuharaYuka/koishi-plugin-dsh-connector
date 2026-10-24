@@ -2,21 +2,27 @@
 import { defineComponent, h, inject, onUnmounted, ref } from "vue";
 var NAV_SECTIONS = [
   {
-    title: "\u57FA\u7840",
+    title: "基础",
     items: [
-      { label: "\u8FDE\u63A5", header: "\u8FDE\u63A5" },
-      { label: "\u4F1A\u8BDD", header: "\u4F1A\u8BDD" },
-      { label: "\u56DE\u590D", header: "\u56DE\u590D" },
-      { label: "\u4EA4\u4E92", header: "\u4EA4\u4E92" }
+      { label: "连接", header: "连接" },
+      { label: "会话", header: "会话" }
     ]
   },
   {
-    title: "\u5176\u4ED6",
+    title: "消息",
     items: [
-      { label: "\u6743\u9650", header: "\u6743\u9650" },
-      { label: "\u9644\u4EF6", header: "\u9644\u4EF6" },
-      { label: "\u7528\u91CF", header: "\u7528\u91CF" },
-      { label: "\u8C03\u8BD5", header: "\u8C03\u8BD5" }
+      { label: "回复", header: "回复" },
+      { label: "图片", header: "图片" },
+      { label: "用量", header: "用量" }
+    ]
+  },
+  {
+    title: "其他",
+    items: [
+      { label: "交互", header: "交互" },
+      { label: "权限", header: "权限" },
+      { label: "附件", header: "附件" },
+      { label: "调试", header: "调试" }
     ]
   }
 ];
@@ -186,18 +192,18 @@ var ConfigNav = defineComponent({
         { class: ["dsh-nav", collapsed.value && "is-collapsed"], style: { top: `${origin.value.top}px`, right: `${origin.value.right}px` } },
         [
           h("div", { class: "dsh-nav-header", onMousedown: onDragStart, onTouchstart: onDragStart }, [
-            h("span", { class: "dsh-nav-title" }, "\u914D\u7F6E\u5BFC\u822A"),
+            h("span", { class: "dsh-nav-title" }, "配置导航"),
             h(
               "button",
               {
                 class: "dsh-nav-toggle",
                 type: "button",
-                title: collapsed.value ? "\u5C55\u5F00" : "\u6536\u8D77",
+                title: collapsed.value ? "展开" : "收起",
                 onClick: () => {
                   collapsed.value = !collapsed.value;
                 }
               },
-              collapsed.value ? "\u25B8" : "\u25BE"
+              collapsed.value ? "▸" : "▾"
             )
           ]),
           h("div", { class: "dsh-nav-body" }, sections.flatMap(({ section, items }) => [

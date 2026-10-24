@@ -99,6 +99,25 @@ export const Config: Schema<Config> = Schema.intersect([
     ])
       .default('active')
       .description('**归档筛选**<br>归档状态取自 DSH 工作区'),
+    pollInterval: Schema.natural()
+      .min(300)
+      .max(10000)
+      .step(100)
+      .default(1200)
+      .description('**轮询间隔**<br>单位毫秒，越小反应越快'),
+    promptTimeout: Schema.natural()
+      .min(10)
+      .max(3600)
+      .default(600)
+      .description('**等待上限**<br>单位秒，超时后继续执行并补发'),
+    clientTimeZone: Schema.string()
+      .default('Asia/Shanghai')
+      .description('**时区**<br>IANA 名称，如 `Asia/Shanghai`'),
+    historyLimit: Schema.natural()
+      .min(1)
+      .max(50)
+      .default(5)
+      .description('**历史条数**<br>`dsh.history` 默认条数'),
   }).description('会话'),
 
   Schema.object({
@@ -108,7 +127,7 @@ export const Config: Schema<Config> = Schema.intersect([
       Schema.const('image').description('转成图片'),
     ])
       .default('text')
-      .description('**回复格式**<br>`image` 需要 `koishi-plugin-puppeteer`'),
+      .description('**回复格式**<br>`image` 需要可用的 puppeteer 服务'),
     splitLength: Schema.natural()
       .min(0)
       .max(5000)
@@ -138,14 +157,14 @@ export const Config: Schema<Config> = Schema.intersect([
       .max(1024)
       .step(20)
       .default(720)
-      .description('**正文宽度**<br>单位像素，`720` 适合手机'),
+      .description('**正文宽度**<br>单位像素，手机适合 `720`'),
     imageMinLength: Schema.natural()
       .min(0)
       .max(5000)
       .step(50)
       .default(200)
       .description('**图片阈值**<br>更短的回复仍发文本；`0` 表示都转图片'),
-  }).description('图片回复'),
+  }).description('图片'),
 
   Schema.object({
     naturalLanguagePrivate: Schema.boolean()
@@ -156,25 +175,6 @@ export const Config: Schema<Config> = Schema.intersect([
       .max(1440)
       .default(30)
       .description('**直通窗口**<br>多少分钟内交互过才生效'),
-    pollInterval: Schema.natural()
-      .min(300)
-      .max(10000)
-      .step(100)
-      .default(1200)
-      .description('**轮询间隔**<br>单位毫秒'),
-    promptTimeout: Schema.natural()
-      .min(10)
-      .max(3600)
-      .default(600)
-      .description('**等待上限**<br>超时后继续执行并补发结果'),
-    clientTimeZone: Schema.string()
-      .default('Asia/Shanghai')
-      .description('**时区**<br>IANA 名称，如 `Asia/Shanghai`'),
-    historyLimit: Schema.natural()
-      .min(1)
-      .max(50)
-      .default(5)
-      .description('**历史条数**<br>`dsh.history` 默认条数'),
   }).description('交互'),
 
   Schema.object({
@@ -232,7 +232,7 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     debug: Schema.boolean()
       .default(false)
-      .description('**调试日志**<br>输出连接、RPC、事件桥、提问与回合过程'),
+      .description('**调试日志**<br>连接、RPC、事件桥、提问与回合过程'),
   }).description('调试'),
 ])
 
